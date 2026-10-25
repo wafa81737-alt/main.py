@@ -14,7 +14,6 @@ RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir -r requirements.txt
 
 ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
-
 RUN python -m playwright install chromium && \
     python -m playwright install chromium-headless-shell && \
     python -m playwright install-deps chromium || true
