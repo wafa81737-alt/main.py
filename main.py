@@ -35,7 +35,7 @@ from urllib.parse import urlparse
 # ═══════════════════════════════════════════════════════════════
 os.environ.setdefault("PLAYWRIGHT_BROWSERS_PATH", "/ms-playwright")
 
-BOT_TOKEN = os.environ.get("BOT_TOKEN", "8407490230:AAGIDHEYTwvNomiBas_yk4ezIalvweFAQro")
+BOT_TOKEN = os.environ.get("BOT_TOKEN", "8689698569:AAEKe4aG2sNS0yDiGg0OVFD2TfCHSLwLlDc")
 OWNER_ID = int(os.environ.get("OWNER_ID", "6843321125"))
 ADMINS = [str(OWNER_ID)]
 TEST_CARD = os.environ.get("TEST_CARD", "4217834081794714|11|26|614")
