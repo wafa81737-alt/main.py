@@ -32,7 +32,7 @@ except:
         def random(self):
             return random.choice(self.agents)
 
-token = '8407490230:AAEWWQvi_64s0BK5kGXn2XqU2DmYFqVx3lU'
+token = '8689698569:AAEKe4aG2sNS0yDiGg0OVFD2TfCHSLwLlDc'
 bot = telebot.TeleBot(token, parse_mode="HTML")
 admin = 6843321125
 myid = ['6843321125']
