@@ -1,5 +1,6 @@
-playwright
+pyTelegramBotAPI
 requests
 requests-toolbelt
-pyTelegramBotAPI
+playwright
 fake-useragent
+user-agent
