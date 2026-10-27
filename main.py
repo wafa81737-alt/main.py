@@ -1,12 +1,11 @@
 #!/usr/bin/env python3
 # =====================================================
-#  Card Checker Bot — FINAL v7 (200k+ Stable)
-#  - Handles 200k+ links without crash
-#  - Resume support via /resume
-#  - Progress saved every 50 links
-#  - Terms & Conditions auto-accepted
-#  - Auto refresh (auth_method based)
-#  - Memory-safe + file-based results
+#  Card Checker Bot — FINAL v8 (Ultimate)
+#  - 200k+ links stable
+#  - Real-time display per link
+#  - Resume support
+#  - Terms auto-accept
+#  - Smart refresh
 # =====================================================
 import telebot
 import time
@@ -43,9 +42,8 @@ OWNER_ID = 6843321125
 
 waiting_users = {}
 reply_mode = {}
-processing_status = {}   # user_id -> dict
-mass_active = {}         # user_id -> True
-mass_pause = {}          # user_id -> True
+mass_active = {}
+mass_pause = {}
 
 if not os.path.exists('blockusers.txt'):
     with open('blockusers.txt', 'w') as f:
@@ -111,7 +109,7 @@ def safe_send_document(chat_id, file_path, caption="", parse_mode="HTML", retrie
                 try:
                     with open(file_path, 'rb') as f:
                         plain = re.sub(r'<[^>]+>', '', caption)
-                        return bot.send_document(chat_id, f, caption=plain)
+                        return bot.send_document(chat_id, f, caption=plain[:1024])
                 except: pass
             if "429" in err:
                 try:
@@ -143,9 +141,6 @@ def safe_send_message(chat_id, text, parse_mode="HTML", retries=3, reply_markup=
     return None
 
 
-# ============================================================
-#  Progress save/resume
-# ============================================================
 def save_progress(user_id, data):
     try:
         with open(f'progress_{user_id}.json', 'w', encoding='utf-8') as f:
@@ -307,7 +302,6 @@ class PayPalTester:
         self.all_content = ""
         self.page_html = ""
         self.auth_method = "none"
-        self.terms_required = False
         self.email = f"{random.choice(self.first_name)}{random.randint(100,999)}@gmail.com"
         self.r = requests.Session()
         self.r.verify = False
@@ -405,12 +399,6 @@ class PayPalTester:
                   r'"give-price-id"\s*:\s*"([^"]+)"']:
             m = re.search(p, c)
             if m: self.current_price_id = m.group(1); break
-
-        # terms detection
-        if re.search(r'give_agree_to_terms|give_terms_agreement', c, re.IGNORECASE):
-            self.terms_required = True
-        if 'terms and conditions' in c.lower():
-            self.terms_required = True
 
         self.price_levels = []
         for pat, mode in [
@@ -1274,8 +1262,8 @@ def ali_al2(massege):
 
         if not is_live_response(result):
             safe_edit_message(chat_id, ko.message_id,
-                f"❌ <b>Not Live</b>\n🔗 <code>{link}</code>\n\n"
-                f"📝 <b>Response:</b> <code>{result}</code>\n"
+                f"❌ <b>Not Live</b>\n🔗 <code>{link[:100]}</code>\n\n"
+                f"📝 <b>Response:</b> <code>{str(result)[:100]}</code>\n"
                 f"🔐 <b>Auth:</b> <code>{tester.auth_method}</code>")
             return
 
@@ -1296,13 +1284,13 @@ def ali_al2(massege):
         if 'ORDER_NOT_APPROVED' in result.upper() or 'PAYER_CANNOT_PAY' in result.upper():
             display = "Payer cannot pay for this transaction."
         else:
-            display = result
+            display = str(result)[:100]
 
         caption = f'''✅ <b>Live Gateway Found!</b>
 ━━━━━━━━━━━━━━━━━━━━
 🔗 <code>{link[:100]}</code>
 ━━━━━━━━━━━━━━━━━━━━
-💬 <b>Response:</b> <code>{str(display)[:100]}</code>
+💬 <b>Response:</b> <code>{display}</code>
 💰 <b>Amount:</b> <code>${tester.donation}</code>
 💱 <b>Currency:</b> <code>{tester.currency}</code>
 🔐 <b>Auth:</b> <code>{tester.auth_method}</code>
@@ -1435,13 +1423,55 @@ def _run_mass_job(chat_id, user_id, links, start_idx, progress):
     except: pass
 
     status_msg = safe_send_message(chat_id,
-        f"📊 <b>Mass Scan</b>\n"
+        f"📊 <b>Mass Scan Started</b>\n"
         f"📌 Total: {total}\n"
-        f"♻️ From: {start_idx}\n"
         f"⏳ Starting...")
 
-    last_update = [time.time()]
+    # shared state for status thread
+    current_link = [""]
+    current_response = [""]
     live_counter = [live]
+
+    # ✅ Status updater — every 2 seconds
+    def status_updater():
+        while mass_active.get(user_id, False):
+            try:
+                if not status_msg:
+                    time.sleep(2)
+                    continue
+
+                pct = int((processed / total) * 100) if total > 0 else 0
+                elapsed = time.time() - started_at
+                spd = processed / elapsed if elapsed > 0 else 0
+                eta = (total - processed) / spd if spd > 0 else 0
+                bar_len = 20
+                filled = int((pct / 100) * bar_len)
+                bar = '█' * filled + '░' * (bar_len - filled)
+
+                link_display = current_link[0][:60] if current_link[0] else "..."
+                resp_display = current_response[0][:60] if current_response[0] else "..."
+
+                safe_edit_message(chat_id, status_msg.message_id,
+                    f"📊 <b>Mass Scan</b>\n"
+                    f"━━━━━━━━━━━━━━━━━━\n"
+                    f"📌 Total: {total}\n"
+                    f"✅ Live: {live}\n"
+                    f"❌ Dead: {dead}\n"
+                    f"⏳ {pct}% {bar}\n"
+                    f"━━━━━━━━━━━━━━━━━━\n"
+                    f"🔗 <b>Current:</b>\n"
+                    f"<code>{link_display}</code>\n"
+                    f"💬 <b>Response:</b>\n"
+                    f"<code>{resp_display}</code>\n"
+                    f"━━━━━━━━━━━━━━━━━━\n"
+                    f"⚡ Speed: {spd:.1f}/s\n"
+                    f"⏱️ ETA: {int(eta/60)}m {int(eta%60)}s\n"
+                    f"━━━━━━━━━━━━━━━━━━\n"
+                    f"🛑 /stop | ♻️ /resume")
+            except: pass
+            time.sleep(2)
+
+    threading.Thread(target=status_updater, daemon=True).start()
 
     try:
         for idx in range(start_idx, total):
@@ -1457,15 +1487,17 @@ def _run_mass_job(chat_id, user_id, links, start_idx, progress):
                 break
 
             link = links[idx]
+            current_link[0] = link
+            current_response[0] = "Checking..."
 
             try:
                 result = check_single_link(link)
             except Exception as e:
                 result = {'link': link, 'live': False, 'respons': f'Error: {str(e)[:50]}', 'tester': None}
 
+            current_response[0] = str(result.get('respons', 'Unknown'))[:100]
             processed += 1
 
-            # Save to results file
             try:
                 with open(results_file, 'a', encoding='utf-8') as f:
                     f.write(f"{link} => {result.get('respons', 'unknown')}\n")
@@ -1474,7 +1506,6 @@ def _run_mass_job(chat_id, user_id, links, start_idx, progress):
             if result and result.get('live'):
                 live += 1
                 live_counter[0] += 1
-
                 try:
                     tester = result.get('tester')
                     code = generate_gateway_code(
@@ -1499,49 +1530,23 @@ def _run_mass_job(chat_id, user_id, links, start_idx, progress):
                     safe_send_document(chat_id, gateway_path, caption=caption)
                     try: os.remove(gateway_path)
                     except: pass
-
                 except Exception as e:
-                    print(f"[live] error: {e}")
+                    print(f"[live] {e}")
             else:
                 dead += 1
 
-            # Save progress every 50
             if processed % 50 == 0:
                 progress['processed'] = processed
                 progress['live'] = live
                 progress['dead'] = dead
                 save_progress(user_id, progress)
 
-            # Update status every 10s
-            now = time.time()
-            if now - last_update[0] >= 10:
-                last_update[0] = now
-                try:
-                    percent = int((processed / total) * 100) if total > 0 else 0
-                    elapsed = now - started_at
-                    speed = processed / elapsed if elapsed > 0 else 0
-                    eta = (total - processed) / speed if speed > 0 else 0
-                    bar_len = 20
-                    filled = int((percent / 100) * bar_len)
-                    bar = '█' * filled + '░' * (bar_len - filled)
-
-                    if status_msg:
-                        safe_edit_message(chat_id, status_msg.message_id,
-                            f"📊 <b>Mass Scan</b>\n"
-                            f"━━━━━━━━━━━━━━━━━━\n"
-                            f"📌 Total: {total}\n"
-                            f"✅ Live: {live}\n"
-                            f"❌ Dead: {dead}\n"
-                            f"⏳ {percent}% {bar}\n"
-                            f"⚡ Speed: {speed:.1f}/s\n"
-                            f"⏱️ ETA: {int(eta/60)}m {int(eta%60)}s\n"
-                            f"━━━━━━━━━━━━━━━━━━\n"
-                            f"🛑 /stop | ♻️ /resume")
-                except: pass
-
             time.sleep(0.15)
 
         # Final
+        mass_active[user_id] = False
+        time.sleep(2)
+
         if not mass_pause.get(user_id, False):
             progress['processed'] = processed
             progress['live'] = live
@@ -1567,6 +1572,7 @@ Dev: @FAWZY30"""
 
     except Exception as e:
         import traceback; traceback.print_exc()
+        mass_active[user_id] = False
         progress['processed'] = processed
         progress['live'] = live
         progress['dead'] = dead
@@ -1575,8 +1581,6 @@ Dev: @FAWZY30"""
             f"⚠️ <b>Crashed at {processed}/{total}</b>\n"
             f"♻️ /resume to continue\n"
             f"Error: {str(e)[:100]}")
-    finally:
-        mass_active[user_id] = False
 
 
 # ============================================================
