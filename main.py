@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Gift of Life Donation v5 — fixed selectors + 5$
+Gift of Life Donation v7 — name-based frame detection + robust flow
 """
 
 import os
@@ -46,12 +46,10 @@ CARD_TYPE = "MasterCard"
 
 DONATION_AMOUNT = "5"
 
-
-# كل الـ IDs فيها نقطتين. لازم نلفها بـ [id='...']
 P = "_ArrevaOnlineDonationsPortlet_WAR_ArrevaOnlineDonationsPortlet_:form1:"
 
+
 def sid(name):
-    """يبني selector آمن للـ id اللي فيه :"""
     return f'[id="{P}{name}"]'
 
 
@@ -79,6 +77,62 @@ def tg_photo(path, caption=""):
         print(f"TG photo error: {e}", flush=True)
 
 
+def dump_frames(page, label="FRAMES"):
+    try:
+        info = []
+        for i, f in enumerate(page.frames):
+            try:
+                url = (f.url or "")[:80]
+                name = f.name or ""
+                info.append(f"#{i} name='{name}' url='{url}'")
+            except Exception:
+                info.append(f"#{i} (unreadable)")
+        tg_msg(f"📋 {label} ({len(info)}):\n" + "\n".join(info))
+    except Exception as e:
+        tg_msg(f"⚠️ dump_frames: {e}")
+
+
+def find_donation_frame(page, total_seconds=120):
+    """يرجع Frame حقيقي بيدور على name='objectForm' أو URL فيه donate-now"""
+    start = time.time()
+    attempt = 0
+    while time.time() - start < total_seconds:
+        attempt += 1
+
+        # المحاولة 1: name = objectForm + تأكد إن الفورم محمّل
+        for f in page.frames:
+            try:
+                if f.name == "objectForm":
+                    try:
+                        f.locator('[id*="datafirst"]').first.wait_for(state="attached", timeout=2000)
+                        return f, attempt
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+
+        # المحاولة 2: URL
+        for f in page.frames:
+            try:
+                u = f.url or ""
+                if "donate-now" in u and "Arreva" in u:
+                    # اتأكد إن الفورم محمّل
+                    try:
+                        f.locator('[id*="datafirst"]').first.wait_for(state="attached", timeout=2000)
+                        return f, attempt
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+
+        if attempt % 10 == 0:
+            dump_frames(page, f"Attempt {attempt}")
+
+        time.sleep(2)
+
+    return None, attempt
+
+
 def fill(frame, selector, value, label=""):
     try:
         el = frame.locator(selector).first
@@ -86,7 +140,6 @@ def fill(frame, selector, value, label=""):
         el.click(timeout=3000)
         el.fill("", timeout=3000)
         el.type(str(value), delay=50)
-        # trigger events
         el.evaluate("el => { el.dispatchEvent(new Event('input',{bubbles:true})); el.dispatchEvent(new Event('change',{bubbles:true})); el.dispatchEvent(new Event('blur',{bubbles:true})); }")
         tg_msg(f"✅ {label or selector}: filled")
         return True
@@ -123,8 +176,16 @@ def click(frame, selector, label=""):
         return False
 
 
+def check_reject_in_text(text):
+    for line in text.split("\n"):
+        l = line.strip()
+        if "REJECT" in l.upper() or "DECLINED" in l.upper():
+            return l
+    return None
+
+
 def run():
-    tg_msg("🚀 Gift of Life Donation v5 — Start")
+    tg_msg("🚀 Gift of Life Donation v7 — Start")
 
     cdp_url = f"wss://{BD_USER}:{BD_PASS}@{BD_HOST}:{BD_PORT}"
 
@@ -149,57 +210,49 @@ def run():
     tg_msg("🔄 [1] Opening page...")
     try:
         page.goto(TARGET_URL, wait_until="domcontentloaded", timeout=60000)
-        time.sleep(15)
+        time.sleep(10)
     except Exception as e:
         tg_msg(f"❌ Load: {str(e)[:200]}")
         return
     tg_msg("✅ Page loaded")
 
-    # 2. ابحث عن iframe
-    tg_msg("🔄 [2] Waiting for donation iframe...")
-    frame = None
-    for attempt in range(20):
-        for f in page.frames:
-            try:
-                u = f.url or ""
-                if "donate-now" in u and "Arreva" in u:
-                    frame = f
-                    break
-            except Exception:
-                continue
-        if frame:
-            break
-        time.sleep(2)
+    # 2. البحث عن iframe
+    tg_msg("🔄 [2] Searching for donation iframe (up to 120s)...")
+    frame, attempts = find_donation_frame(page, 120)
 
     if not frame:
-        tg_msg("❌ Donation iframe not found")
+        tg_msg("❌ iframe not found after 120s — trying reload once")
+        try:
+            page.reload(wait_until="domcontentloaded", timeout=60000)
+            time.sleep(15)
+        except Exception:
+            pass
+        frame, attempts = find_donation_frame(page, 90)
+
+    if not frame:
+        tg_msg("❌ iframe still not found after reload")
+        dump_frames(page, "FINAL FRAMES")
         return
-    tg_msg(f"✅ Found iframe")
 
-    time.sleep(6)
+    tg_msg(f"✅ Found frame (attempts={attempts}, name='{frame.name}', url='{(frame.url or '')[:80]}')")
 
-    # 3. اختار Other
+    time.sleep(5)
+
+    # 3. اختار Other + ادخل 5
     tg_msg("🔄 [3] Selecting 'Other' amount = $5...")
     click(frame, sid("rb_amount:4"), "Other radio")
     time.sleep(2)
 
-    # املأ المبلغ. الحقل اسمه other_amount
-    other_sel = '[id*="other_amount"]'
-    amount_filled = False
     try:
-        el = frame.locator(other_sel).first
+        el = frame.locator('[id*="other_amount"]').first
         if el.count() > 0:
             el.wait_for(state="visible", timeout=5000)
             el.fill("", timeout=3000)
             el.type(DONATION_AMOUNT, delay=60)
             el.evaluate("el => { el.dispatchEvent(new Event('input',{bubbles:true})); el.dispatchEvent(new Event('change',{bubbles:true})); }")
-            tg_msg(f"✅ Amount filled: {DONATION_AMOUNT}")
-            amount_filled = True
+            tg_msg(f"✅ Amount: {DONATION_AMOUNT}")
     except Exception as e:
         tg_msg(f"⚠️ Amount fill: {str(e)[:150]}")
-
-    if not amount_filled:
-        # جرّب JS
         try:
             frame.evaluate("""(amt) => {
                 const el = document.querySelector('input[id*="other_amount"]');
@@ -207,17 +260,15 @@ def run():
                     el.value = amt;
                     el.dispatchEvent(new Event('input',{bubbles:true}));
                     el.dispatchEvent(new Event('change',{bubbles:true}));
-                    el.dispatchEvent(new Event('blur',{bubbles:true}));
                 }
             }""", DONATION_AMOUNT)
-            tg_msg("✅ Amount via JS")
-        except Exception as e:
-            tg_msg(f"❌ Amount JS: {str(e)[:150]}")
+        except Exception:
+            pass
 
-    # 4. املأ بيانات المتبرع
-    tg_msg("🔄 [4] Filling donor info...")
     time.sleep(2)
 
+    # 4. بيانات المتبرع
+    tg_msg("🔄 [4] Filling donor info...")
     fill(frame, sid("datafirst"), FIRST_NAME, "First name")
     fill(frame, sid("datalast"), LAST_NAME, "Last name")
     fill(frame, sid("email"), EMAIL, "Email")
@@ -226,34 +277,32 @@ def run():
     fill(frame, sid("data_address_city"), CITY, "City")
     fill(frame, sid("data_address_zip"), ZIP, "Zip")
 
-    # Country: دوّر على United States
+    # Country
     try:
         us_value = frame.evaluate(f"""() => {{
             const sel = document.querySelector('select[id="{P}data_Rcountry"]');
             if (!sel) return null;
             for (const o of sel.options) {{
-                if (o.text.trim().toLowerCase() === 'united states') return o.value;
+                const t = o.text.trim().toLowerCase();
+                if (t === 'united states' || t === 'usa' || t === 'us') return o.value;
             }}
             return null;
         }}""")
         if us_value:
             select_option(frame, sid("data_Rcountry"), us_value, f"Country (US={us_value})")
         else:
-            tg_msg("⚠️ United States not in country list")
+            tg_msg("⚠️ US not found in country list")
     except Exception as e:
         tg_msg(f"⚠️ Country: {str(e)[:150]}")
 
-    # State - California
     select_option(frame, sid("data_Rstate"), STATE_VALUE, "State (CA)")
 
-    # 5. املأ بيانات البطاقة
+    # 5. بيانات البطاقة
     tg_msg("🔄 [5] Filling card info...")
     time.sleep(1)
-
     fill(frame, sid("nameOnCard"), CARD_NAME, "Card name")
     fill(frame, sid("cardNumber"), CARD_NUMBER, "Card number")
     fill(frame, sid("cardCSV"), CARD_CVV, "CVV")
-
     select_option(frame, sid("cardType"), CARD_TYPE, "Card type")
     select_option(frame, sid("expiration_date_month"), CARD_MONTH, "Exp month")
     select_option(frame, sid("expiration_date_year"), CARD_YEAR, "Exp year")
@@ -265,8 +314,7 @@ def run():
     except Exception:
         pass
 
-    # 7. reCAPTCHA
-    tg_msg("🔄 [7] Checking reCAPTCHA...")
+    # 7. reCAPTCHA check
     time.sleep(3)
     try:
         token = frame.evaluate("""() => {
@@ -277,7 +325,7 @@ def run():
     except Exception:
         pass
 
-    # 8. Pre-submit state
+    # 8. Pre-submit
     tg_msg("🔄 [8] Verifying...")
     try:
         vals = frame.evaluate(f"""() => {{
@@ -307,7 +355,6 @@ def run():
     # 9. Submit
     tg_msg("🔄 [9] Clicking Submit...")
     submit_ok = click(frame, sid("j_idt1913"), "Submit")
-
     if not submit_ok:
         try:
             frame.evaluate(f"""() => {{
@@ -315,8 +362,8 @@ def run():
                 if (btn) btn.click();
             }}""")
             tg_msg("✅ JS click sent")
-        except Exception as e:
-            tg_msg(f"❌ JS click: {str(e)[:150]}")
+        except Exception:
+            pass
 
     time.sleep(10)
 
@@ -330,6 +377,26 @@ def run():
     except Exception:
         pass
 
+    final_result = None
+    try:
+        iframe_text = frame.evaluate("() => document.body.innerText")
+        reject_line = check_reject_in_text(iframe_text)
+        if reject_line:
+            final_result = reject_line
+            tg_msg(f"⛔ SERVER REJECT: {reject_line}")
+    except Exception as e:
+        tg_msg(f"⚠️ iframe read: {str(e)[:150]}")
+
+    if not final_result:
+        try:
+            main_text = page.evaluate("document.body.innerText")
+            reject_line = check_reject_in_text(main_text)
+            if reject_line:
+                final_result = reject_line
+                tg_msg(f"⛔ SERVER REJECT (main): {reject_line}")
+        except Exception:
+            pass
+
     try:
         iframe_text = frame.evaluate("() => document.body.innerText")
         result_lines = []
@@ -337,15 +404,19 @@ def run():
             l = line.strip()
             if any(k in l.lower() for k in ["success","approved","declin","error","invalid",
                                              "thank","confirm","failed","reject","captcha",
-                                             "verified","otp","verification"]):
+                                             "verified","otp","verification","limit"]):
                 result_lines.append(l)
         if result_lines:
             tg_msg("📊 Result:\n" + "\n".join(result_lines[:25]))
         else:
-            tg_msg("⚠️ No result keywords. iframe preview:\n<pre>"
-                   + iframe_text[:1500] + "</pre>")
+            tg_msg("⚠️ No keywords. iframe preview:\n<pre>" + iframe_text[:1500] + "</pre>")
     except Exception as e:
         tg_msg(f"⚠️ Read: {str(e)[:150]}")
+
+    if final_result:
+        tg_msg(f"🏁 FINAL RESULT: {final_result}")
+    else:
+        tg_msg("🏁 FINAL RESULT: unknown (check screenshot)")
 
     tg_msg("✅ DONE")
 
