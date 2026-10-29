@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Gift of Life Donation v15 — keyboard.type only for password fields
+Gift of Life Donation v16 — init script forces type=text at page load
 """
 
 import os
@@ -48,6 +48,45 @@ DONATION_AMOUNT = "5"
 
 P = "_ArrevaOnlineDonationsPortlet_WAR_ArrevaOnlineDonationsPortlet_:form1:"
 
+# ═══════════════════════════════════════════════════
+# INIT SCRIPT — يجبر type=password يبقى text
+# ═══════════════════════════════════════════════════
+INIT_SCRIPT = """
+(function() {
+    // 1. Override setAttribute
+    const origSetAttribute = Element.prototype.setAttribute;
+    Element.prototype.setAttribute = function(name, value) {
+        if (name === 'type' && value && value.toLowerCase() === 'password') {
+            value = 'text';
+        }
+        return origSetAttribute.call(this, name, value);
+    };
+    
+    // 2. Override type property
+    const origDescriptor = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'type');
+    if (origDescriptor) {
+        Object.defineProperty(HTMLInputElement.prototype, 'type', {
+            get: function() {
+                return origDescriptor.get.call(this);
+            },
+            set: function(v) {
+                if (v && v.toLowerCase() === 'password') {
+                    v = 'text';
+                }
+                return origDescriptor.set.call(this, v);
+            },
+            configurable: true
+        });
+    }
+    
+    // 3. Override HTMLInputElement prototype
+    const origInput = HTMLInputElement.prototype;
+    const origPasswordDesc = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'type');
+    
+    console.log('[INIT] Password typing bypass installed');
+})();
+"""
+
 def sid(name): return f'[id="{P}{name}"]'
 
 def tg_msg(text):
@@ -90,38 +129,64 @@ def fill_text_field(frame, field_suffix, value, label=""):
         tg_msg(f"❌ {label or field_suffix}: {str(e)[:150]}")
         return False
 
-def fill_password_keyboard_only(frame, field_suffix, value, label=""):
-    """keyboard.type فقط — بدون fill() ولا type change"""
-    tg_msg(f"🔄 Keyboard-only fill: {label or field_suffix}")
+def fill_card_safely(frame, field_suffix, value, label=""):
+    """محاولة متعددة: fill عادي، لو فشل keyboard، لو فشل JS"""
+    tg_msg(f"🔄 Filling {label or field_suffix}...")
+    
+    # 1. جرّب fill عادي
     try:
         el = frame.locator(sid(field_suffix)).first
         el.wait_for(state="visible", timeout=10000)
-        
-        # 1. اضغط على الحقل
-        el.click(timeout=5000)
-        time.sleep(0.5)
-        
-        # 2. امسح أي محتوى (Ctrl+A + Delete)
+        el.fill(str(value), timeout=5000)
+        el.evaluate("el => el.dispatchEvent(new Event('input',{bubbles:true}))")
+        actual = frame.evaluate("(id) => { const el = document.getElementById(id); return el ? el.value : null; }", f"{P}{field_suffix}")
+        if actual == str(value):
+            tg_msg(f"✅ {label} (fill): '{actual}'")
+            return True
+        else:
+            tg_msg(f"⚠️ {label} (fill): value lost")
+    except Exception as e:
+        tg_msg(f"⚠️ {label} (fill): {str(e)[:100]}")
+    
+    # 2. keyboard.type
+    try:
+        el = frame.locator(sid(field_suffix)).first
+        el.click(timeout=3000)
         page = frame.page
         page.keyboard.press("Control+A")
-        time.sleep(0.2)
         page.keyboard.press("Delete")
-        time.sleep(0.2)
-        
-        # 3. اكتب القيمة
         page.keyboard.type(str(value), delay=40)
-        time.sleep(1)
-        
-        # 4. تحقق
-        actual = frame.evaluate(
-            "(id) => { const el = document.getElementById(id); return el ? el.value : null; }",
-            f"{P}{field_suffix}"
-        )
-        tg_msg(f"{'✅' if actual == str(value) else '⚠️'} {label}: '{actual}' (len={len(actual) if actual else 0})")
-        return actual == str(value)
+        time.sleep(0.5)
+        actual = frame.evaluate("(id) => { const el = document.getElementById(id); return el ? el.value : null; }", f"{P}{field_suffix}")
+        if actual == str(value):
+            tg_msg(f"✅ {label} (keyboard): '{actual}'")
+            return True
+        else:
+            tg_msg(f"⚠️ {label} (keyboard): value lost")
     except Exception as e:
-        tg_msg(f"❌ {label}: {str(e)[:150]}")
-        return False
+        tg_msg(f"⚠️ {label} (keyboard): {str(e)[:100]}")
+    
+    # 3. JS
+    try:
+        frame.evaluate("""([id, val]) => {
+            const el = document.getElementById(id);
+            if (!el) return false;
+            el.value = val;
+            el.dispatchEvent(new Event('input', {bubbles: true}));
+            el.dispatchEvent(new Event('change', {bubbles: true}));
+            return true;
+        }""", [f"{P}{field_suffix}", str(value)])
+        actual = frame.evaluate("(id) => { const el = document.getElementById(id); return el ? el.value : null; }", f"{P}{field_suffix}")
+        if actual == str(value):
+            tg_msg(f"✅ {label} (JS): '{actual}'")
+            return True
+        else:
+            tg_msg(f"⚠️ {label} (JS): value lost")
+    except Exception as e:
+        tg_msg(f"⚠️ {label} (JS): {str(e)[:100]}")
+    
+    tg_msg(f"❌ {label}: all methods failed")
+    return False
 
 def select_option_safe(frame, field_suffix, value, label=""):
     try:
@@ -270,7 +335,7 @@ def handle_acceptance(page):
     return False
 
 def run():
-    tg_msg("🚀 Gift of Life Donation v15 — keyboard-only password")
+    tg_msg("🚀 Gift of Life Donation v16 — init script + multi-fill")
 
     cdp_url = f"wss://{BD_USER}:{BD_PASS}@{BD_HOST}:{BD_PORT}"
 
@@ -288,6 +353,11 @@ def run():
                     "(KHTML, like Gecko) Chrome/139.0.0.0 Mobile Safari/537.36"),
         locale="en-US",
     )
+    
+    # ═══ Init script قبل أي page ═══
+    context.add_init_script(INIT_SCRIPT)
+    tg_msg("✅ Init script added")
+    
     page = context.new_page()
     page.set_default_timeout(60000)
 
@@ -314,11 +384,25 @@ def run():
     tg_msg(f"✅ frame='{frame.name}'")
     time.sleep(5)
 
-    # 3. المبلغ
+    # 3. اطبع type الحقول قبل أي حاجة
+    try:
+        types = frame.evaluate(f"""() => {{
+            const P = '{P}';
+            const cn = document.getElementById(P + 'cardNumber');
+            const cv = document.getElementById(P + 'cardCSV');
+            return {{
+                cardNumber_type: cn ? cn.type : 'not_found',
+                cardCSV_type: cv ? cv.type : 'not_found',
+            }};
+        }}""")
+        tg_msg(f"📋 Field types BEFORE: {json.dumps(types, ensure_ascii=False)}")
+    except Exception: pass
+
+    # 4. المبلغ
     set_amount_exact(frame, DONATION_AMOUNT)
 
-    # 4. بيانات المتبرع
-    tg_msg("🔄 [4] Donor info...")
+    # 5. بيانات المتبرع
+    tg_msg("🔄 [5] Donor info...")
     fill_text_field(frame, "datafirst", FIRST_NAME, "First name")
     fill_text_field(frame, "datalast", LAST_NAME, "Last name")
     fill_text_field(frame, "email", EMAIL, "Email")
@@ -344,12 +428,26 @@ def run():
 
     select_option_safe(frame, "data_Rstate", STATE_VALUE, "State (CA)")
 
-    # 5. البطاقة — keyboard only
-    tg_msg("🔄 [5] Card info (KEYBOARD ONLY)...")
+    # 6. اطبع type الحقول بعد الـ init script
+    try:
+        types2 = frame.evaluate(f"""() => {{
+            const P = '{P}';
+            const cn = document.getElementById(P + 'cardNumber');
+            const cv = document.getElementById(P + 'cardCSV');
+            return {{
+                cardNumber_type: cn ? cn.type : 'not_found',
+                cardCSV_type: cv ? cv.type : 'not_found',
+            }};
+        }}""")
+        tg_msg(f"📋 Field types AFTER init: {json.dumps(types2, ensure_ascii=False)}")
+    except Exception: pass
+
+    # 7. البطاقة — multi-fill
+    tg_msg("🔄 [7] Card info (MULTI-FILL)...")
     time.sleep(1)
     fill_text_field(frame, "nameOnCard", CARD_NAME, "Card name")
-    fill_password_keyboard_only(frame, "cardNumber", CARD_NUMBER, "Card number")
-    fill_password_keyboard_only(frame, "cardCSV", CARD_CVV, "CVV")
+    fill_card_safely(frame, "cardNumber", CARD_NUMBER, "Card number")
+    fill_card_safely(frame, "cardCSV", CARD_CVV, "CVV")
     select_option_safe(frame, "cardType", CARD_TYPE, "Card type")
     select_option_safe(frame, "expiration_date_month", CARD_MONTH, "Exp month")
     select_option_safe(frame, "expiration_date_year", CARD_YEAR, "Exp year")
@@ -359,11 +457,11 @@ def run():
         tg_photo("/tmp/before_captcha.png", "📸 Before captcha")
     except Exception: pass
 
-    # 7. captcha
+    # 8. captcha
     captcha_ok = solve_captcha(frame, page)
 
-    # 8. Pre-submit
-    tg_msg("🔄 [8] Verifying...")
+    # 9. Pre-submit
+    tg_msg("🔄 [9] Verifying...")
     try:
         vals = frame.evaluate(f"""() => {{
             const g = (n) => {{ const el = document.getElementById('{P}' + n); return el ? el.value : null; }};
@@ -380,8 +478,8 @@ def run():
         tg_msg(f"📋 Pre-submit:\n<pre>{json.dumps(vals, indent=1, ensure_ascii=False)}</pre>")
     except Exception as e: tg_msg(f"⚠️ Verify: {str(e)[:150]}")
 
-    # 9. Submit
-    tg_msg("🔄 [9] Clicking Submit...")
+    # 10. Submit
+    tg_msg("🔄 [10] Clicking Submit...")
     try:
         btn = frame.locator(sid("j_idt1913")).first
         btn.wait_for(state="visible", timeout=10000)
@@ -391,14 +489,14 @@ def run():
 
     time.sleep(5)
 
-    # 10. Acceptance
-    tg_msg("🔄 [10] Handling Acceptance...")
+    # 11. Acceptance
+    tg_msg("🔄 [11] Handling Acceptance...")
     handle_acceptance(page)
 
     time.sleep(15)
 
-    # 11. النتيجة
-    tg_msg("🔄 [11] Reading result...")
+    # 12. النتيجة
+    tg_msg("🔄 [12] Reading result...")
     time.sleep(10)
     try:
         page.screenshot(path="/tmp/result.png", full_page=True)
