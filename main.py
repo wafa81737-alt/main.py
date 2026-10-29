@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Gift of Life Donation v9 — find frame by fields, fix fills, robust
+Gift of Life Donation v10 — fill stable, amount update, captcha last
 """
 
 import os
@@ -87,71 +87,87 @@ def dump_frames(page, label="FRAMES", deep=False):
             except Exception:
                 info.append(f"#{i} (unreadable)")
         tg_msg(f"📋 {label} ({len(info)}):\n" + "\n".join(info))
-
-        if deep:
-            for f in page.frames:
-                if f.name == "arrevaEmbedded":
-                    try:
-                        inner = f.evaluate("""() => {
-                            const arr = [];
-                            document.querySelectorAll('iframe').forEach(el => {
-                                arr.push({name: el.name||'', id: el.id||'', src: (el.src||'').slice(0,120)});
-                            });
-                            return arr;
-                        }""")
-                        if inner:
-                            tg_msg(f"🔎 iframes inside arrevaEmbedded: {json.dumps(inner, ensure_ascii=False)[:800]}")
-                        else:
-                            tg_msg("🔎 arrevaEmbedded has no inner iframes")
-                    except Exception as e:
-                        tg_msg(f"⚠️ arrevaEmbedded: {str(e)[:120]}")
     except Exception as e:
         tg_msg(f"⚠️ dump_frames: {e}")
 
 
 def find_donation_frame(page, total_seconds=120):
-    """يدور على أي frame فيه حقول الفورم"""
     start = time.time()
     attempt = 0
     while time.time() - start < total_seconds:
         attempt += 1
-
         for f in page.frames:
             try:
-                has_first = f.locator('[id*="datafirst"]').first.count() > 0
-                if has_first:
-                    tg_msg(f"✅ Found form fields in frame name='{f.name}' url='{(f.url or '')[:60]}'")
+                if f.locator('[id*="datafirst"]').first.count() > 0:
+                    tg_msg(f"✅ Found form in frame name='{f.name}'")
                     return f, attempt
             except Exception:
                 pass
             try:
-                has_card = f.locator('[id*="cardNumber"]').first.count() > 0
-                if has_card:
+                if f.locator('[id*="cardNumber"]').first.count() > 0:
                     tg_msg(f"✅ Found card field in frame name='{f.name}'")
                     return f, attempt
             except Exception:
                 pass
-
         if attempt % 10 == 0:
             dump_frames(page, f"Attempt {attempt}", deep=True)
-
         time.sleep(2)
     return None, attempt
 
 
-def fill(frame, selector, value, label=""):
-    """fill: fill() بسيط + تحقق من القيمة الفعلية"""
+def safe_fill(frame, selector, value, label=""):
+    """
+    ملء آمن: fill() + input event فقط
+    بدون change/blur لتجنب AJAX re-render
+    """
     try:
         el = frame.locator(selector).first
         el.wait_for(state="visible", timeout=10000)
         el.fill(str(value), timeout=5000)
-        el.evaluate("el => { el.dispatchEvent(new Event('input',{bubbles:true})); el.dispatchEvent(new Event('change',{bubbles:true})); }")
+        el.evaluate("""el => {
+            el.dispatchEvent(new Event('input', {bubbles: true}));
+        }""")
+        time.sleep(0.3)
         actual = el.input_value(timeout=3000)
         ok = (actual == str(value))
-        tg_msg(f"{'✅' if ok else '⚠️'} {label or selector}: set='{actual}'" + ("" if ok else f" (wanted '{value}')"))
+        tg_msg(f"{'✅' if ok else '⚠️'} {label or selector}: '{actual}'" + ("" if ok else f" (wanted '{value}')"))
         return ok
     except Exception as e:
         tg_msg(f"❌ {label or selector}: {str(e)[:150]}")
+        return False
+
+
+def fill_with_js(frame, field_suffix, value, label=""):
+    """ملء مباشر عبر JS — أكثر أماناً للـ PrimeFaces"""
+    try:
+        ok = frame.evaluate(
+            """([id, val]) => {
+                const el = document.getElementById(id);
+                if (!el) return false;
+                el.focus();
+                el.value = val;
+                el.dispatchEvent(new Event('input', {bubbles: true}));
+                return true;
+            }""",
+            [f"{P}{field_suffix}", str(value)]
+        )
+        if ok:
+            # تحقق
+            actual = frame.evaluate(
+                """(id) => {
+                    const el = document.getElementById(id);
+                    return el ? el.value : null;
+                }""",
+                f"{P}{field_suffix}"
+            )
+            ok2 = (actual == str(value))
+            tg_msg(f"{'✅' if ok2 else '⚠️'} {label or field_suffix} (JS): '{actual}'")
+            return ok2
+        else:
+            tg_msg(f"❌ {label or field_suffix} (JS): element not found")
+            return False
+    except Exception as e:
+        tg_msg(f"❌ {label or field_suffix} (JS): {str(e)[:150]}")
         return False
 
 
@@ -191,53 +207,69 @@ def check_reject_in_text(text):
     return None
 
 
+# ═══════════════════════════════════════════════════
+#  خطوات محددة
+# ═══════════════════════════════════════════════════
+
 def set_amount(frame, amount):
-    """يختار Other + يحط المبلغ بـ JS + يتحقق"""
+    """يختار Other + يحط المبلغ + يستنى label يتحدث"""
     tg_msg(f"🔄 Setting amount = {amount}")
 
-    # 1) اختار Other
+    # 1) اضغط Other radio
     try:
-        other_radio = frame.locator(sid("rb_amount:4"))
-        other_radio.wait_for(state="visible", timeout=10000)
-        other_radio.check(timeout=5000)
+        r = frame.locator(sid("rb_amount:4")).first
+        r.wait_for(state="visible", timeout=10000)
+        r.check(timeout=5000)
         tg_msg("✅ Other radio checked")
+        # شغل حدث change لـ PrimeFaces
+        r.evaluate("el => el.dispatchEvent(new Event('change',{bubbles:true}))")
     except Exception as e:
         tg_msg(f"⚠️ Other radio: {str(e)[:120]}")
 
-    # 2) استنى حقل other_amount
-    time.sleep(3)
-    try:
-        frame.locator('input[id*="other_amount"]').first.wait_for(state="visible", timeout=15000)
-        tg_msg("✅ other_amount visible")
-    except Exception as e:
-        tg_msg(f"⚠️ other_amount: {str(e)[:100]}")
+    time.sleep(4)
 
-    # 3) حط المبلغ بـ JS
-    ok = frame.evaluate(
+    # 2) املأ المبلغ بـ JS
+    frame.evaluate(
         """(amt) => {
             const el = document.querySelector('input[id*="other_amount"]');
             if (!el) return false;
             el.focus();
             el.value = amt;
-            el.dispatchEvent(new Event('input',{bubbles:true}));
-            el.dispatchEvent(new Event('change',{bubbles:true}));
+            el.dispatchEvent(new Event('input', {bubbles: true}));
+            el.dispatchEvent(new Event('change', {bubbles: true}));
             el.blur();
             return true;
         }""",
         str(amount)
     )
-    tg_msg(f"{'✅' if ok else '❌'} amount set via JS")
-    time.sleep(2)
+    tg_msg(f"✅ amount value = {amount} (JS)")
+    time.sleep(3)
 
-    # 4) تحقق
+    # 3) استنى label_total_amount يتحدث
+    for i in range(15):
+        try:
+            total = frame.evaluate("""() => {
+                const lt = document.getElementById('label_total_amount');
+                return lt ? lt.value : null;
+            }""")
+            if total and "$ 0.00" not in total and "0.00" not in total.replace("$ ", ""):
+                tg_msg(f"✅ total updated: {total}")
+                break
+        except Exception:
+            pass
+        time.sleep(1)
+
+    # 4) تحقق نهائي
     try:
         check = frame.evaluate(
             """() => {
                 const oa = document.querySelector('input[id*="other_amount"]');
                 const lt = document.getElementById('label_total_amount');
+                const lh = document.getElementById('label_total_hidden_amount');
                 return {
                     other_value: oa ? oa.value : null,
-                    total_label: lt ? lt.value : null
+                    total_label: lt ? lt.value : null,
+                    total_hidden: lh ? lh.value : null,
                 };
             }"""
         )
@@ -246,20 +278,178 @@ def set_amount(frame, amount):
         tg_msg(f"⚠️ amount check: {str(e)[:120]}")
 
 
-def check_captcha(frame):
+def fill_donor_info(frame):
+    """بيانات المتبرع — بدون card"""
+    tg_msg("🔄 [4] Filling donor info...")
+
+    # نستخدم fill_with_js للجميع لضمان القيمة
+    fill_with_js(frame, "datafirst", FIRST_NAME, "First name")
+    fill_with_js(frame, "datalast", LAST_NAME, "Last name")
+    fill_with_js(frame, "email", EMAIL, "Email")
+    fill_with_js(frame, "data_phone", PHONE, "Phone")
+    fill_with_js(frame, "data_address_one", ADDRESS_1, "Address")
+    fill_with_js(frame, "data_address_two", ADDRESS_2, "Apt/Suite")
+    fill_with_js(frame, "data_address_city", CITY, "City")
+    fill_with_js(frame, "data_address_zip", ZIP, "Zip")
+
+    # Country
+    try:
+        us_value = frame.evaluate(f"""() => {{
+            const sel = document.querySelector('select[id="{P}data_Rcountry"]');
+            if (!sel) return null;
+            for (const o of sel.options) {{
+                const t = o.text.trim().toLowerCase();
+                if (t === 'united states' || t === 'usa' || t === 'us') return o.value;
+            }}
+            return null;
+        }}""")
+        if us_value:
+            select_option(frame, sid("data_Rcountry"), us_value, f"Country (US={us_value})")
+    except Exception as e:
+        tg_msg(f"⚠️ Country: {str(e)[:150]}")
+
+    # State — نستخدم JS + change
+    try:
+        frame.evaluate(
+            """([id, val]) => {
+                const el = document.getElementById(id);
+                if (!el) return false;
+                el.value = val;
+                el.dispatchEvent(new Event('change', {bubbles: true}));
+                return true;
+            }""",
+            [f"{P}data_Rstate", STATE_VALUE]
+        )
+        tg_msg(f"✅ State (CA) set via JS")
+    except Exception as e:
+        tg_msg(f"⚠️ State JS: {str(e)[:120]}")
+
+
+def find_card_type_select(frame):
+    """يدور على select اللي فيه MasterCard"""
+    try:
+        sel_info = frame.evaluate("""() => {
+            const results = [];
+            document.querySelectorAll('select').forEach(el => {
+                const opts = Array.from(el.options).map(o => o.value);
+                if (opts.includes('MasterCard') || opts.includes('Visa') || opts.includes('Amex')) {
+                    results.push({id: el.id, name: el.name, options: opts});
+                }
+            });
+            return results;
+        }""")
+        tg_msg(f"🔎 card type selects: {json.dumps(sel_info, ensure_ascii=False)[:500]}")
+        return sel_info
+    except Exception as e:
+        tg_msg(f"⚠️ card type scan: {str(e)[:120]}")
+        return []
+
+
+def fill_card_info(frame):
+    """البطاقة — نستخدم JS مباشرة لتجنب re-render"""
+    tg_msg("🔄 [5] Filling card info (JS-based, stable)")
+
+    # 1) الاسم
+    fill_with_js(frame, "nameOnCard", CARD_NAME, "Card name")
+
+    # 2) رقم البطاقة — JS
+    fill_with_js(frame, "cardNumber", CARD_NUMBER, "Card number")
+
+    # 3) CVV — JS
+    fill_with_js(frame, "cardCSV", CARD_CVV, "CVV")
+
+    # 4) cardType — ندوّر على select اللي فيه MasterCard
+    card_type_sel = find_card_type_select(frame)
+    if card_type_sel:
+        target = card_type_sel[0]
+        try:
+            el = frame.locator(f'[id="{target["id"]}"]').first
+            el.select_option(value=CARD_TYPE, timeout=5000)
+            el.evaluate("el => el.dispatchEvent(new Event('change',{bubbles:true}))")
+            tg_msg(f"✅ Card type selected in '{target['id']}'")
+        except Exception as e:
+            tg_msg(f"⚠️ card type: {str(e)[:120]}")
+    else:
+        # جرّب cardType بالـ id الأصلي
+        try:
+            frame.evaluate(
+                """([id, val]) => {
+                    const el = document.getElementById(id);
+                    if (!el) return false;
+                    el.value = val;
+                    el.dispatchEvent(new Event('change', {bubbles: true}));
+                    return true;
+                }""",
+                [f"{P}cardType", CARD_TYPE]
+            )
+            tg_msg("✅ card type via JS (fallback)")
+        except Exception as e:
+            tg_msg(f"⚠️ card type JS: {str(e)[:120]}")
+
+    # 5) الشهر والسنة
+    select_option(frame, sid("expiration_date_month"), CARD_MONTH, "Exp month")
+    select_option(frame, sid("expiration_date_year"), CARD_YEAR, "Exp year")
+
+
+def solve_captcha_once(frame, page):
+    """يحل reCAPTCHA مرة واحدة قبل الـ Submit"""
+    tg_msg("🔄 [7] reCAPTCHA — single attempt before submit")
+
+    # تحقق من التوكن الحالي
     try:
         token = frame.evaluate("""() => {
             const ta = document.querySelector('textarea[name="g-recaptcha-response"]');
             return ta ? ta.value : '';
         }""")
-        tg_msg(f"📌 reCAPTCHA token len = {len(token) if token else 0}")
-        return token and len(token) > 20
+        tg_msg(f"📌 Current token len = {len(token) if token else 0}")
+        if token and len(token) > 20:
+            tg_msg("✅ reCAPTCHA already solved")
+            return True
     except Exception:
+        pass
+
+    # اضغط على checkbox الـ reCAPTCHA
+    try:
+        recaptcha_found = False
+        for f in page.frames:
+            try:
+                if "recaptcha/api2/anchor" in (f.url or ""):
+                    recaptcha_found = True
+                    cb = f.locator("#recaptcha-anchor").first
+                    cb.wait_for(state="attached", timeout=8000)
+                    cb.click(force=True, timeout=5000)
+                    tg_msg("✅ Clicked reCAPTCHA checkbox")
+                    break
+            except Exception:
+                continue
+
+        if not recaptcha_found:
+            tg_msg("⚠️ reCAPTCHA anchor frame not found")
+            return False
+
+        # استنى التوكن
+        for i in range(20):
+            try:
+                token = frame.evaluate("""() => {
+                    const ta = document.querySelector('textarea[name="g-recaptcha-response"]');
+                    return ta ? ta.value : '';
+                }""")
+                if token and len(token) > 20:
+                    tg_msg(f"✅ reCAPTCHA solved! len={len(token)}")
+                    return True
+            except Exception:
+                pass
+            time.sleep(1)
+
+        tg_msg("⚠️ reCAPTCHA still empty after 20s")
+        return False
+    except Exception as e:
+        tg_msg(f"⚠️ reCAPTCHA: {str(e)[:150]}")
         return False
 
 
 def run():
-    tg_msg("🚀 Gift of Life Donation v9 — Start")
+    tg_msg("🚀 Gift of Life Donation v10 — Start")
 
     cdp_url = f"wss://{BD_USER}:{BD_PASS}@{BD_HOST}:{BD_PORT}"
 
@@ -290,11 +480,11 @@ def run():
         return
     tg_msg("✅ Page loaded")
 
-    # 2. البحث عن الـ frame
+    # 2. ابحث عن الـ frame
     tg_msg("🔄 [2] Searching for form fields in ANY frame...")
     frame, attempts = find_donation_frame(page, 120)
     if not frame:
-        tg_msg("❌ no frame with fields — reload once")
+        tg_msg("❌ no frame with fields — reload")
         try:
             page.reload(wait_until="domcontentloaded", timeout=60000)
             time.sleep(15)
@@ -310,62 +500,26 @@ def run():
     time.sleep(5)
 
     # 3. المبلغ
-    tg_msg("🔄 [3] Setting amount...")
     set_amount(frame, DONATION_AMOUNT)
 
     # 4. بيانات المتبرع
-    tg_msg("🔄 [4] Filling donor info...")
-    fill(frame, sid("datafirst"), FIRST_NAME, "First name")
-    fill(frame, sid("datalast"), LAST_NAME, "Last name")
-    fill(frame, sid("email"), EMAIL, "Email")
-    fill(frame, sid("data_phone"), PHONE, "Phone")
-    fill(frame, sid("data_address_one"), ADDRESS_1, "Address")
-    fill(frame, sid("data_address_two"), ADDRESS_2, "Apt/Suite")
-    fill(frame, sid("data_address_city"), CITY, "City")
-    fill(frame, sid("data_address_zip"), ZIP, "Zip")
+    fill_donor_info(frame)
 
-    # Country
+    # 5. البطاقة (JS-based لتجنب re-render)
+    fill_card_info(frame)
+
+    # 6. screenshot
     try:
-        us_value = frame.evaluate(f"""() => {{
-            const sel = document.querySelector('select[id="{P}data_Rcountry"]');
-            if (!sel) return null;
-            for (const o of sel.options) {{
-                const t = o.text.trim().toLowerCase();
-                if (t === 'united states' || t === 'usa' || t === 'us') return o.value;
-            }}
-            return null;
-        }}""")
-        if us_value:
-            select_option(frame, sid("data_Rcountry"), us_value, f"Country (US={us_value})")
-    except Exception as e:
-        tg_msg(f"⚠️ Country: {str(e)[:150]}")
-
-    select_option(frame, sid("data_Rstate"), STATE_VALUE, "State (CA)")
-
-    # 5. البطاقة
-    tg_msg("🔄 [5] Filling card info...")
-    time.sleep(1)
-    fill(frame, sid("nameOnCard"), CARD_NAME, "Card name")
-    fill(frame, sid("cardNumber"), CARD_NUMBER, "Card number")
-    fill(frame, sid("cardCSV"), CARD_CVV, "CVV")
-    if not select_option(frame, sid("cardType"), CARD_TYPE, "Card type (by id)"):
-        select_option(frame, f'select[name="{P}cardType"]', CARD_TYPE, "Card type (by name)")
-    select_option(frame, sid("expiration_date_month"), CARD_MONTH, "Exp month")
-    select_option(frame, sid("expiration_date_year"), CARD_YEAR, "Exp year")
-
-    # 6. Screenshot
-    try:
-        page.screenshot(path="/tmp/before_submit.png", full_page=True)
-        tg_photo("/tmp/before_submit.png", "📸 Before submit")
+        page.screenshot(path="/tmp/before_captcha.png", full_page=True)
+        tg_photo("/tmp/before_captcha.png", "📸 Before captcha")
     except Exception:
         pass
 
-    # 7. reCAPTCHA
-    tg_msg("🔄 [7] Checking reCAPTCHA...")
-    check_captcha(frame)
+    # 7. reCAPTCHA — مرة واحدة قبل Submit
+    captcha_ok = solve_captcha_once(frame, page)
 
-    # 8. Pre-submit
-    tg_msg("🔄 [8] Verifying...")
+    # 8. Pre-submit state
+    tg_msg("🔄 [8] Verifying before submit...")
     try:
         vals = frame.evaluate(f"""() => {{
             const g = (n) => {{
@@ -383,6 +537,8 @@ def run():
                 addr2: g('data_address_two'),
                 city: g('data_address_city'),
                 zip: g('data_address_zip'),
+                state: g('data_Rstate'),
+                country: g('data_Rcountry'),
                 card_name: g('nameOnCard'),
                 card_num_len: (g('cardNumber') || '').length,
                 cvv_len: (g('cardCSV') || '').length,
@@ -397,6 +553,9 @@ def run():
         tg_msg(f"📋 Pre-submit:\n<pre>{json.dumps(vals, indent=1, ensure_ascii=False)}</pre>")
     except Exception as e:
         tg_msg(f"⚠️ Verify: {str(e)[:150]}")
+
+    if not captcha_ok:
+        tg_msg("⛔ captcha not solved — submit will likely fail")
 
     # 9. Submit
     tg_msg("🔄 [9] Clicking Submit...")
