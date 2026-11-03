@@ -50,8 +50,8 @@ except Exception:
 # ================================================================
 #  CONFIG
 # ================================================================
-TOKEN = os.getenv('BOT_TOKEN', 'YOUR_TOKEN_HERE')
-OWNER_ID = int(os.getenv('OWNER_ID', '0'))
+TOKEN = os.getenv('BOT_TOKEN', '8689698569:AAFJjLfJ9ztJg9QNJugf8xJbb0Ernow8vG8')
+OWNER_ID = int(os.getenv('OWNER_ID', '6843321125'))
 ADMINS = {str(OWNER_ID)}
 
 USERS_FILE = 'users.txt'
