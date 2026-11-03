@@ -1985,6 +1985,7 @@ _GATEWAY_TEMPLATE = Template(GATEWAY_TEMPLATE_STR)
 def generate_gateway_code(result, link, amount='1.00', tester=None):
     link = link or 'https://invalid.local/'
     display_result = normalize_result(result)[:100]
+    display_result = display_result.replace('\n', ' ').replace('\r', '')
 
     def g(attr, default=''):
         try:
@@ -2002,12 +2003,14 @@ def generate_gateway_code(result, link, amount='1.00', tester=None):
     form_fields = (
         tester.form_fields if tester and tester.form_fields else {}
     )
+
+    # ✅ repr() → Python literals صحيحة (False / True / None)
     try:
-        price_levels_json = json.dumps(price_levels)
+        price_levels_json = repr(price_levels)
     except Exception:
         price_levels_json = '[]'
     try:
-        form_fields_json = json.dumps(form_fields)
+        form_fields_json = repr(form_fields)
     except Exception:
         form_fields_json = '{}'
     try:
