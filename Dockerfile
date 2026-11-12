@@ -1,39 +1,32 @@
-FROM mcr.microsoft.com/playwright/python:v1.48.0-jammy
+FROM python:3.13-slim
 
 # ══════════════════════════════════════════════════════════════
-#  Xvfb + Fonts
+#  System dependencies (Playwright + Chromium + Xvfb)
 # ══════════════════════════════════════════════════════════════
 RUN apt-get update && apt-get install -y --no-install-recommends \
+    libnss3 libnspr4 libatk1.0-0 libatk-bridge2.0-0 libcups2 \
+    libdrm2 libdbus-1-3 libxkbcommon0 libxcomposite1 libxdamage1 \
+    libxfixes3 libxrandr2 libgbm1 libpango-1.0-0 libcairo2 \
+    libasound2 libatspi2.0-0 libexpat1 libfontconfig1 libfreetype6 \
+    libx11-6 libxcb1 libxext6 \
     xvfb x11-utils \
     fonts-liberation fonts-noto-color-emoji \
-    ca-certificates wget curl \
+    ca-certificates wget curl unzip \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
-# ══════════════════════════════════════════════════════════════
-#  Python dependencies
-# ══════════════════════════════════════════════════════════════
 COPY requirements.txt .
 RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir -r requirements.txt
 
-# ══════════════════════════════════════════════════════════════
-#  Playwright Chromium
-# ══════════════════════════════════════════════════════════════
 ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
-RUN python -m playwright install chromium
+RUN python -m playwright install chromium && \
+    python -m playwright install-deps chromium
 
-# ══════════════════════════════════════════════════════════════
-#  Copy app
-# ══════════════════════════════════════════════════════════════
 COPY . .
-RUN chmod +x start.sh
 
-# ══════════════════════════════════════════════════════════════
-#  Run
-# ══════════════════════════════════════════════════════════════
 ENV DISPLAY=:99
-ENV HEADLESS=false
 
-CMD ["./start.sh"]
+# ✅ تشغيل Xvfb + البوت في نفس الـ shell — مع انتظار نظيف
+CMD ["sh", "-c", "Xvfb :99 -screen 0 540x1170x24 -ac +extension GLX +render -noreset & sleep 2 && exec python main.py"]
