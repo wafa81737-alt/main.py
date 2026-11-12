@@ -16,7 +16,7 @@ from playwright.sync_api import sync_playwright, TimeoutError as PWTimeout, Erro
 # ═══════════════════════════════════════════════════════════════════════════════
 #  CONFIG
 # ═══════════════════════════════════════════════════════════════════════════════
-BOT_TOKEN = '8407490230:AAGIDHEYTwvNomiBas_yk4ezIalvweFAQro'
+BOT_TOKEN = '8407490230:AAEhaQd1CAsCH8qRaaFCQ65o9RVAf8EdTiA'
 OWNER_ID  = 6843321125
 
 SCREENSHOT_DIR = 'screens'
