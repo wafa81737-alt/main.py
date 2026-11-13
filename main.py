@@ -1,16 +1,15 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Authorize.Net Payment Bot — Telegram
-- يشغل Playwright + xvfb
-- يبعت سكرين شوت للتليجرام على أي خطأ
-- يدعم أوامر: /start /pay /screenshot /status
+Authorize.Net Payment Bot — Telegram (Fixed)
 """
 
 import os
+import sys
 import time
-import traceback
 import asyncio
+import traceback
+import logging
 from datetime import datetime
 
 from telegram import Update
@@ -21,9 +20,8 @@ from telegram.ext import (
 )
 from playwright.sync_api import sync_playwright, TimeoutError as PWTimeout
 
-
 # ═══════════════════════════════════════════════════════════
-#  الإعدادات
+#  إعدادات
 # ═══════════════════════════════════════════════════════════
 BOT_TOKEN = "8407490230:AAEhaQd1CAsCH8qRaaFCQ65o9RVAf8EdTiA"
 ADMIN_CHAT_ID = 6843321125
@@ -44,16 +42,23 @@ CARD = {
     'phone': '44985367122',
 }
 
-# مسار حفظ السكرين شوت
 SCREENSHOT_DIR = "/app/screenshots"
 os.makedirs(SCREENSHOT_DIR, exist_ok=True)
 
+# ═══════════════════════════════════════════════════════════
+#  Logging
+# ═══════════════════════════════════════════════════════════
+logging.basicConfig(
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    level=logging.INFO,
+    stream=sys.stdout,
+)
+logger = logging.getLogger(__name__)
 
 # ═══════════════════════════════════════════════════════════
-#  دوال مساعدة
+#  Helpers
 # ═══════════════════════════════════════════════════════════
 def save_screenshot(page, prefix="error"):
-    """يحفظ سكرين شوت ويرجع المسار"""
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
     path = os.path.join(SCREENSHOT_DIR, f"{prefix}_{ts}.png")
     try:
@@ -68,7 +73,6 @@ def save_screenshot(page, prefix="error"):
 
 
 async def send_screenshot_to_admin(bot, path, caption=""):
-    """يبعت السكرين شوت للأدمن"""
     if not path or not os.path.exists(path):
         await bot.send_message(
             chat_id=ADMIN_CHAT_ID,
@@ -90,13 +94,9 @@ async def send_screenshot_to_admin(bot, path, caption=""):
 
 
 # ═══════════════════════════════════════════════════════════
-#  منطق الدفع (Playwright)
+#  Payment logic (sync — will run in executor)
 # ═══════════════════════════════════════════════════════════
-def run_payment(bot):
-    """
-    يشغل Playwright، يفتح صفحة الدفع، ويحاول يدفع.
-    بيرجع dict فيه النتيجة، أو بيرفع Exception مع سكرين شوت.
-    """
+def run_payment():
     result = {
         'success': False,
         'status': 'unknown',
@@ -107,7 +107,7 @@ def run_payment(bot):
 
     with sync_playwright() as p:
         browser = p.chromium.launch(
-            headless=False,  # xvfb هيوفر الشاشة
+            headless=False,
             args=[
                 '--disable-blink-features=AutomationControlled',
                 '--disable-dev-shm-usage',
@@ -115,7 +115,6 @@ def run_payment(bot):
                 '--disable-gpu',
             ],
         )
-
         context = browser.new_context(
             user_agent=(
                 'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 '
@@ -124,11 +123,9 @@ def run_payment(bot):
             viewport={'width': 412, 'height': 915},
             locale='en-US',
         )
-
         page = context.new_page()
 
         try:
-            # ─── 1. فتح الصفحة ───
             try:
                 page.goto(ORDER_PAY_URL, wait_until='networkidle', timeout=60000)
             except PWTimeout:
@@ -136,7 +133,6 @@ def run_payment(bot):
 
             result['url'] = page.url
 
-            # ─── 2. زرار الدفع ───
             pay_selectors = [
                 'button#place_order',
                 'button[name="woocommerce_checkout_place_order"]',
@@ -157,9 +153,8 @@ def run_payment(bot):
                     continue
 
             if not pay_button:
-                raise RuntimeError("مفيش زرار دفع ظاهر على الصفحة")
+                raise RuntimeError("مفيش زرار دفع ظاهر")
 
-            # ─── 3. حقول البطاقة (لو موجودة) ───
             for sel, val in [
                 ('input[name*="card_number"], input[autocomplete="cc-number"]', CARD['number']),
                 ('input[name*="expiry"], input[autocomplete="cc-exp"]', CARD['expiry']),
@@ -172,10 +167,8 @@ def run_payment(bot):
                 except Exception:
                     pass
 
-            # ─── 4. دوس الدفع ───
             pay_button.click(timeout=15000)
 
-            # ─── 5. استنى Authorize.Net ───
             start = time.time()
             authorize_frame = None
             while time.time() - start < 60:
@@ -200,7 +193,6 @@ def run_payment(bot):
             except Exception:
                 pass
 
-            # ─── 6. املأ فورم Authorize.Net ───
             fields = {
                 'input[name="x_card_num"], input#x_card_num': CARD['number'],
                 'input[name="x_exp_date"], input#x_exp_date': CARD['expiry'].replace('/', ''),
@@ -221,7 +213,6 @@ def run_payment(bot):
                 except Exception:
                     pass
 
-            # ─── 7. Submit ───
             submit_selectors = [
                 'input[type="submit"][value*="Submit"]',
                 'input[type="submit"]',
@@ -245,7 +236,6 @@ def run_payment(bot):
 
             submit_btn.click(timeout=15000)
 
-            # ─── 8. استنى النتيجة ───
             try:
                 page.wait_for_load_state('networkidle', timeout=60000)
             except PWTimeout:
@@ -273,7 +263,6 @@ def run_payment(bot):
                 result['status'] = 'unknown'
 
         except Exception as e:
-            # حفظ سكرين شوت وقت الخطأ
             path = save_screenshot(page, "exception")
             result['screenshot'] = path
             result['message'] = f"{type(e).__name__}: {e}"
@@ -289,12 +278,12 @@ def run_payment(bot):
 
 
 # ═══════════════════════════════════════════════════════════
-#  أوامر التليجرام
+#  Command handlers
 # ═══════════════════════════════════════════════════════════
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    logger.info(f"/start from {update.effective_chat.id}")
     await update.message.reply_text(
         "🤖 Authorize.Net Payment Bot\n\n"
-        "الأوامر:\n"
         "/pay — ابدأ محاولة الدفع\n"
         "/status — حالة البوت\n"
         "/screenshot — آخر سكرين شوت\n"
@@ -303,6 +292,7 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    logger.info(f"/status from {update.effective_chat.id}")
     await update.message.reply_text(
         f"✅ البوت شغال\n"
         f"🕐 الوقت: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
@@ -311,6 +301,7 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    logger.info(f"/help from {update.effective_chat.id}")
     await update.message.reply_text(
         "استخدم /pay عشان تبدأ محاولة دفع.\n"
         "لو حصل خطأ، هيوصلك سكرين شوت هنا أوتوماتيك."
@@ -318,6 +309,7 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def cmd_screenshot(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    logger.info(f"/screenshot from {update.effective_chat.id}")
     files = sorted(
         [f for f in os.listdir(SCREENSHOT_DIR) if f.endswith('.png')],
         key=lambda x: os.path.getmtime(os.path.join(SCREENSHOT_DIR, x)),
@@ -332,15 +324,12 @@ async def cmd_screenshot(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def cmd_pay(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    logger.info(f"/pay from {update.effective_chat.id}")
     await update.message.reply_text("⏳ جاري تشغيل محاولة الدفع...")
 
     loop = asyncio.get_event_loop()
-
-    def _run():
-        return run_payment(context.bot)
-
     try:
-        result = await loop.run_in_executor(None, _run)
+        result = await loop.run_in_executor(None, run_payment)
 
         if result['success']:
             await update.message.reply_text(
@@ -351,7 +340,6 @@ async def cmd_pay(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"⚠️ status: {result['status']}\n\n{result['message'][:800]}"
             )
 
-        # ابعت السكرين شوت للأدمن
         if result.get('screenshot'):
             await send_screenshot_to_admin(
                 context.bot,
@@ -361,9 +349,9 @@ async def cmd_pay(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     except Exception as e:
         tb = traceback.format_exc()
+        logger.error(f"/pay error: {e}\n{tb}")
         await update.message.reply_text(f"❌ خطأ:\n{e}")
 
-        # ابعت السكرين شوت + traceback للأدمن
         files = sorted(
             [f for f in os.listdir(SCREENSHOT_DIR) if f.startswith('exception_')],
             key=lambda x: os.path.getmtime(os.path.join(SCREENSHOT_DIR, x)),
@@ -384,13 +372,10 @@ async def cmd_pay(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 # ═══════════════════════════════════════════════════════════
-#  Main
+#  Main — async properly
 # ═══════════════════════════════════════════════════════════
-def main():
-    print("=" * 60)
-    print("Authorize.Net Payment Bot")
-    print("=" * 60)
-
+async def main_async():
+    logger.info("Starting bot...")
     app = Application.builder().token(BOT_TOKEN).build()
 
     app.add_handler(CommandHandler("start", cmd_start))
@@ -399,8 +384,32 @@ def main():
     app.add_handler(CommandHandler("screenshot", cmd_screenshot))
     app.add_handler(CommandHandler("pay", cmd_pay))
 
-    print("[*] البوت شغال...")
-    app.run_polling(allowed_updates=Update.ALL_TYPES)
+    logger.info("Bot handlers registered. Starting polling...")
+    await app.initialize()
+    await app.start()
+    await app.updater.start_polling(allowed_updates=Update.ALL_TYPES)
+
+    # خلي البوت شغال
+    try:
+        while True:
+            await asyncio.sleep(3600)
+    except (KeyboardInterrupt, SystemExit):
+        pass
+    finally:
+        await app.updater.stop()
+        await app.stop()
+        await app.shutdown()
+
+
+def main():
+    print("=" * 60)
+    print("Authorize.Net Payment Bot")
+    print("=" * 60)
+    try:
+        asyncio.run(main_async())
+    except Exception as e:
+        logger.error(f"Fatal: {e}\n{traceback.format_exc()}")
+        sys.exit(1)
 
 
 if __name__ == '__main__':
