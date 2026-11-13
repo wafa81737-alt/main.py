@@ -1,27 +1,39 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
 """
-Playwright — Authorize.Net Payment Flow
-- يفتح صفحة الـ order-pay
-- يدوس على زرار الدفع
-- يستنى الـ payment form من Authorize.Net
-- يدخل بيانات البطاقة
-- يدوس Submit
-- يطبع النتيجة
+Authorize.Net Payment Bot — Telegram
+- يشغل Playwright + xvfb
+- يبعت سكرين شوت للتليجرام على أي خطأ
+- يدعم أوامر: /start /pay /screenshot /status
 """
 
+import os
 import time
-import re
+import traceback
+import asyncio
+from datetime import datetime
+
+from telegram import Update
+from telegram.ext import (
+    Application,
+    CommandHandler,
+    ContextTypes,
+)
 from playwright.sync_api import sync_playwright, TimeoutError as PWTimeout
 
 
 # ═══════════════════════════════════════════════════════════
-#  البيانات
+#  الإعدادات
 # ═══════════════════════════════════════════════════════════
+BOT_TOKEN = "8407490230:AAEhaQd1CAsCH8qRaaFCQ65o9RVAf8EdTiA"
+ADMIN_CHAT_ID = 6843321125
+
 ORDER_PAY_URL = "https://www.beyondlimitsriding.org/checkout/order-pay/27296/?key=wc_order_vuSkXmwK1gF7T"
 
 CARD = {
     'number': '4472270012028906',
-    'expiry': '12/27',        # MM/YY
-    'cvv': '123',             # مش موجود في الـ curl — حط الـ CVV الصح
+    'expiry': '12/27',
+    'cvv': '123',
     'first_name': 'Wafa',
     'last_name': 'Bro',
     'address': 'W356 W456',
@@ -32,21 +44,75 @@ CARD = {
     'phone': '44985367122',
 }
 
-HEADLESS = False   # خليه False عشان تشوف المتصفح وتتدخل لو احتاجت
+# مسار حفظ السكرين شوت
+SCREENSHOT_DIR = "/app/screenshots"
+os.makedirs(SCREENSHOT_DIR, exist_ok=True)
 
 
-def run():
-    print("=" * 60)
-    print("Playwright — Authorize.Net Payment")
-    print("=" * 60)
+# ═══════════════════════════════════════════════════════════
+#  دوال مساعدة
+# ═══════════════════════════════════════════════════════════
+def save_screenshot(page, prefix="error"):
+    """يحفظ سكرين شوت ويرجع المسار"""
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    path = os.path.join(SCREENSHOT_DIR, f"{prefix}_{ts}.png")
+    try:
+        page.screenshot(path=path, full_page=True)
+        return path
+    except Exception:
+        try:
+            page.screenshot(path=path)
+            return path
+        except Exception:
+            return None
+
+
+async def send_screenshot_to_admin(bot, path, caption=""):
+    """يبعت السكرين شوت للأدمن"""
+    if not path or not os.path.exists(path):
+        await bot.send_message(
+            chat_id=ADMIN_CHAT_ID,
+            text=f"⚠️ خطأ (مفيش سكرين شوت)\n{caption[:1000]}",
+        )
+        return
+    try:
+        with open(path, 'rb') as f:
+            await bot.send_photo(
+                chat_id=ADMIN_CHAT_ID,
+                photo=f,
+                caption=f"📸 خطأ:\n{caption[:900]}",
+            )
+    except Exception as e:
+        await bot.send_message(
+            chat_id=ADMIN_CHAT_ID,
+            text=f"⚠️ فشل إرسال السكرين شوت: {e}\n{caption[:500]}",
+        )
+
+
+# ═══════════════════════════════════════════════════════════
+#  منطق الدفع (Playwright)
+# ═══════════════════════════════════════════════════════════
+def run_payment(bot):
+    """
+    يشغل Playwright، يفتح صفحة الدفع، ويحاول يدفع.
+    بيرجع dict فيه النتيجة، أو بيرفع Exception مع سكرين شوت.
+    """
+    result = {
+        'success': False,
+        'status': 'unknown',
+        'message': '',
+        'url': '',
+        'screenshot': None,
+    }
 
     with sync_playwright() as p:
         browser = p.chromium.launch(
-            headless=HEADLESS,
+            headless=False,  # xvfb هيوفر الشاشة
             args=[
                 '--disable-blink-features=AutomationControlled',
                 '--disable-dev-shm-usage',
                 '--no-sandbox',
+                '--disable-gpu',
             ],
         )
 
@@ -57,233 +123,285 @@ def run():
             ),
             viewport={'width': 412, 'height': 915},
             locale='en-US',
-            timezone_id='America/New_York',
         )
 
         page = context.new_page()
 
-        # ─── 1. افتح صفحة الـ order-pay ───
-        print("\n[1] فتح صفحة order-pay...")
         try:
-            page.goto(ORDER_PAY_URL, wait_until='networkidle', timeout=60000)
-        except PWTimeout:
-            print("[!] الصفحة خدت وقت طويل — هكمل بـ domcontentloaded")
-            page.goto(ORDER_PAY_URL, wait_until='domcontentloaded', timeout=60000)
-
-        print(f"[+] URL: {page.url}")
-        print(f"[+] Title: {page.title()}")
-
-        # ─── 2. دوّر على زرار الدفع ───
-        print("\n[2] البحث عن زرار الدفع...")
-        pay_selectors = [
-            'button#place_order',
-            'button[name="woocommerce_checkout_place_order"]',
-            'input#place_order',
-            'input[name="woocommerce_checkout_place_order"]',
-            'button:has-text("Pay")',
-            'button:has-text("Place order")',
-            'button:has-text("Donate")',
-            'input[type="submit"]',
-        ]
-
-        pay_button = None
-        for sel in pay_selectors:
+            # ─── 1. فتح الصفحة ───
             try:
-                el = page.locator(sel).first
-                if el.count() > 0 and el.is_visible():
-                    pay_button = el
-                    print(f"[+] لقيته: {sel}")
-                    break
-            except Exception:
-                continue
+                page.goto(ORDER_PAY_URL, wait_until='networkidle', timeout=60000)
+            except PWTimeout:
+                page.goto(ORDER_PAY_URL, wait_until='domcontentloaded', timeout=60000)
 
-        if not pay_button:
-            print("[!] مفيش زرار دفع ظاهر — هصور الصفحة وأوقف")
-            page.screenshot(path='order_pay.png', full_page=True)
-            browser.close()
-            return
+            result['url'] = page.url
 
-        # ─── 3. دوّر على حقول البطاقة (لو موجودة في الصفحة) ───
-        print("\n[3] البحث عن حقول البطاقة...")
-        card_field_found = False
-        for sel in [
-            'input[name*="card_number"]',
-            'input[name*="cardNumber"]',
-            'input[id*="card-number"]',
-            'input[autocomplete="cc-number"]',
-        ]:
-            try:
-                el = page.locator(sel).first
-                if el.count() > 0 and el.is_visible():
-                    print(f"[+] حقل البطاقة: {sel}")
-                    el.fill(CARD['number'])
-                    card_field_found = True
-                    break
-            except Exception:
-                continue
+            # ─── 2. زرار الدفع ───
+            pay_selectors = [
+                'button#place_order',
+                'button[name="woocommerce_checkout_place_order"]',
+                'input#place_order',
+                'button:has-text("Pay")',
+                'button:has-text("Place order")',
+                'button:has-text("Donate")',
+                'input[type="submit"]',
+            ]
+            pay_button = None
+            for sel in pay_selectors:
+                try:
+                    el = page.locator(sel).first
+                    if el.count() > 0 and el.is_visible():
+                        pay_button = el
+                        break
+                except Exception:
+                    continue
 
-        if card_field_found:
-            # املأ باقي الحقول
-            for sel, value in [
-                ('input[name*="expiry"], input[name*="exp_date"], input[autocomplete="cc-exp"]', CARD['expiry']),
-                ('input[name*="cvv"], input[name*="cvc"], input[autocomplete="cc-csc"]', CARD['cvv']),
+            if not pay_button:
+                raise RuntimeError("مفيش زرار دفع ظاهر على الصفحة")
+
+            # ─── 3. حقول البطاقة (لو موجودة) ───
+            for sel, val in [
+                ('input[name*="card_number"], input[autocomplete="cc-number"]', CARD['number']),
+                ('input[name*="expiry"], input[autocomplete="cc-exp"]', CARD['expiry']),
+                ('input[name*="cvv"], input[autocomplete="cc-csc"]', CARD['cvv']),
             ]:
                 try:
                     el = page.locator(sel).first
                     if el.count() > 0 and el.is_visible():
-                        el.fill(value)
+                        el.fill(val)
                 except Exception:
                     pass
 
-        # ─── 4. دوس على زرار الدفع ───
-        print("\n[4] الضغط على زرار الدفع...")
-        try:
-            pay_button.click(timeout=10000)
-        except Exception as e:
-            print(f"[!] فشل الضغط: {e}")
-            page.screenshot(path='before_click.png', full_page=True)
-            browser.close()
-            return
+            # ─── 4. دوس الدفع ───
+            pay_button.click(timeout=15000)
 
-        # ─── 5. استنى الـ payment form من Authorize.Net ───
-        print("\n[5] انتظار Authorize.Net...")
-        start = time.time()
-        authorize_frame = None
-        while time.time() - start < 60:
-            for frame in page.frames:
-                if 'authorize.net' in (frame.url or '').lower():
-                    authorize_frame = frame
-                    print(f"[+] Authorize.Net frame: {frame.url[:100]}")
+            # ─── 5. استنى Authorize.Net ───
+            start = time.time()
+            authorize_frame = None
+            while time.time() - start < 60:
+                for frame in page.frames:
+                    if 'authorize.net' in (frame.url or '').lower():
+                        authorize_frame = frame
+                        break
+                if authorize_frame:
                     break
-            if authorize_frame:
-                break
-
-            if 'authorize.net' in page.url.lower():
-                print(f"[+] الصفحة اتحولت لـ Authorize.Net: {page.url[:100]}")
-                break
-
-            time.sleep(1)
-
-        if not authorize_frame and 'authorize.net' not in page.url.lower():
-            print("[!] مفيش Authorize.Net ظهر — هصور وأطبع الـ URLs")
-            page.screenshot(path='no_authorize.png', full_page=True)
-            print(f"[+] URL الحالي: {page.url}")
-            for f in page.frames:
-                print(f"    frame: {f.url[:100]}")
-            browser.close()
-            return
-
-        # ─── 6. املأ بيانات البطاقة في Authorize.Net ───
-        print("\n[6] ملء بيانات البطاقة...")
-        target = authorize_frame if authorize_frame else page
-
-        try:
-            target.wait_for_load_state('networkidle', timeout=30000)
-        except Exception:
-            pass
-
-        # حقول Authorize.Net
-        field_map = {
-            'input[name="x_card_num"], input#x_card_num': CARD['number'],
-            'input[name="x_exp_date"], input#x_exp_date': CARD['expiry'].replace('/', ''),
-            'input[name="x_first_name"], input#x_first_name': CARD['first_name'],
-            'input[name="x_last_name"], input#x_last_name': CARD['last_name'],
-            'input[name="x_address"], input#x_address': CARD['address'],
-            'input[name="x_city"], input#x_city': CARD['city'],
-            'input[name="x_state"], input#x_state': CARD['state'],
-            'input[name="x_zip"], input#x_zip': CARD['zip'],
-            'input[name="x_email"], input#x_email': CARD['email'],
-            'input[name="x_phone"], input#x_phone': CARD['phone'],
-        }
-
-        filled = 0
-        for sel, value in field_map.items():
-            try:
-                el = target.locator(sel).first
-                if el.count() > 0:
-                    el.fill(value)
-                    filled += 1
-                    print(f"    ✅ {sel.split(',')[0].strip()}")
-            except Exception as e:
-                print(f"    ⚠️  {sel.split(',')[0].strip()}: {e}")
-
-        print(f"[+] اتملى {filled} حقل")
-
-        # ─── 7. دوّر على Submit في Authorize.Net ───
-        print("\n[7] Submit...")
-        submit_selectors = [
-            'input[type="submit"][value*="Submit"]',
-            'input[type="submit"]',
-            'button[type="submit"]',
-            'button:has-text("Submit")',
-            'button:has-text("Pay")',
-        ]
-
-        submit_btn = None
-        for sel in submit_selectors:
-            try:
-                el = target.locator(sel).first
-                if el.count() > 0 and el.is_visible():
-                    submit_btn = el
-                    print(f"[+] Submit: {sel}")
+                if 'authorize.net' in page.url.lower():
                     break
-            except Exception:
-                continue
+                time.sleep(1)
 
-        if not submit_btn:
-            print("[!] مفيش Submit — هصور وأطبع الصفحة")
+            if not authorize_frame and 'authorize.net' not in page.url.lower():
+                path = save_screenshot(page, "no_authorize")
+                raise RuntimeError(f"مفيش Authorize.Net ظهر. URL: {page.url}")
+
+            target = authorize_frame if authorize_frame else page
+
             try:
-                target.screenshot(path='authorize_form.png', full_page=True)
+                target.wait_for_load_state('networkidle', timeout=30000)
             except Exception:
-                page.screenshot(path='authorize_form.png', full_page=True)
-            browser.close()
-            return
+                pass
 
-        try:
-            submit_btn.click(timeout=10000)
+            # ─── 6. املأ فورم Authorize.Net ───
+            fields = {
+                'input[name="x_card_num"], input#x_card_num': CARD['number'],
+                'input[name="x_exp_date"], input#x_exp_date': CARD['expiry'].replace('/', ''),
+                'input[name="x_first_name"], input#x_first_name': CARD['first_name'],
+                'input[name="x_last_name"], input#x_last_name': CARD['last_name'],
+                'input[name="x_address"], input#x_address': CARD['address'],
+                'input[name="x_city"], input#x_city': CARD['city'],
+                'input[name="x_state"], input#x_state': CARD['state'],
+                'input[name="x_zip"], input#x_zip': CARD['zip'],
+                'input[name="x_email"], input#x_email': CARD['email'],
+                'input[name="x_phone"], input#x_phone': CARD['phone'],
+            }
+            for sel, val in fields.items():
+                try:
+                    el = target.locator(sel).first
+                    if el.count() > 0:
+                        el.fill(val)
+                except Exception:
+                    pass
+
+            # ─── 7. Submit ───
+            submit_selectors = [
+                'input[type="submit"][value*="Submit"]',
+                'input[type="submit"]',
+                'button[type="submit"]',
+                'button:has-text("Submit")',
+                'button:has-text("Pay")',
+            ]
+            submit_btn = None
+            for sel in submit_selectors:
+                try:
+                    el = target.locator(sel).first
+                    if el.count() > 0 and el.is_visible():
+                        submit_btn = el
+                        break
+                except Exception:
+                    continue
+
+            if not submit_btn:
+                path = save_screenshot(page, "no_submit")
+                raise RuntimeError("مفيش Submit في فورم Authorize.Net")
+
+            submit_btn.click(timeout=15000)
+
+            # ─── 8. استنى النتيجة ───
+            try:
+                page.wait_for_load_state('networkidle', timeout=60000)
+            except PWTimeout:
+                pass
+            time.sleep(3)
+
+            result['url'] = page.url
+            path = save_screenshot(page, "result")
+            result['screenshot'] = path
+
+            try:
+                text = page.locator('body').inner_text(timeout=10000)
+            except Exception:
+                text = ""
+
+            result['message'] = text[:1000]
+            low = text.lower()
+
+            if any(k in low for k in ['approved', 'thank you', 'success', 'receipt', 'confirmed']):
+                result['success'] = True
+                result['status'] = 'approved'
+            elif any(k in low for k in ['declined', 'failed', 'error', 'invalid', 'incorrect']):
+                result['status'] = 'declined'
+            else:
+                result['status'] = 'unknown'
+
         except Exception as e:
-            print(f"[!] فشل Submit: {e}")
-            page.screenshot(path='submit_fail.png', full_page=True)
-            browser.close()
-            return
+            # حفظ سكرين شوت وقت الخطأ
+            path = save_screenshot(page, "exception")
+            result['screenshot'] = path
+            result['message'] = f"{type(e).__name__}: {e}"
+            result['status'] = 'exception'
+            raise
+        finally:
+            try:
+                browser.close()
+            except Exception:
+                pass
 
-        # ─── 8. استنى النتيجة ───
-        print("\n[8] انتظار النتيجة...")
-        try:
-            page.wait_for_load_state('networkidle', timeout=60000)
-        except PWTimeout:
-            pass
+    return result
 
-        time.sleep(3)
-        page.screenshot(path='final_result.png', full_page=True)
 
-        # اطبع نص الصفحة
-        try:
-            text = page.locator('body').inner_text(timeout=10000)
-        except Exception:
-            text = ""
+# ═══════════════════════════════════════════════════════════
+#  أوامر التليجرام
+# ═══════════════════════════════════════════════════════════
+async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(
+        "🤖 Authorize.Net Payment Bot\n\n"
+        "الأوامر:\n"
+        "/pay — ابدأ محاولة الدفع\n"
+        "/status — حالة البوت\n"
+        "/screenshot — آخر سكرين شوت\n"
+        "/help — المساعدة"
+    )
 
-        print(f"\n[+] URL النهائي: {page.url}")
-        print(f"[+] عنوان الصفحة: {page.title()}")
 
-        # ابحث عن كلمات مفتاحية
-        text_lower = text.lower()
-        if any(k in text_lower for k in ['approved', 'thank you', 'success', 'receipt', 'confirmed']):
-            print("\n✅ ممكن يكون APPROVED — راجع final_result.png")
-        elif any(k in text_lower for k in ['declined', 'failed', 'error', 'invalid', 'incorrect']):
-            print("\n❌ ممكن يكون DECLINED/ERROR — راجع final_result.png")
+async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(
+        f"✅ البوت شغال\n"
+        f"🕐 الوقت: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
+        f"🎯 Target: {ORDER_PAY_URL[:80]}..."
+    )
+
+
+async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(
+        "استخدم /pay عشان تبدأ محاولة دفع.\n"
+        "لو حصل خطأ، هيوصلك سكرين شوت هنا أوتوماتيك."
+    )
+
+
+async def cmd_screenshot(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    files = sorted(
+        [f for f in os.listdir(SCREENSHOT_DIR) if f.endswith('.png')],
+        key=lambda x: os.path.getmtime(os.path.join(SCREENSHOT_DIR, x)),
+        reverse=True,
+    )
+    if not files:
+        await update.message.reply_text("مفيش سكرين شوت لسه.")
+        return
+    latest = os.path.join(SCREENSHOT_DIR, files[0])
+    with open(latest, 'rb') as f:
+        await update.message.reply_photo(photo=f, caption=f"آخر سكرين شوت: {files[0]}")
+
+
+async def cmd_pay(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("⏳ جاري تشغيل محاولة الدفع...")
+
+    loop = asyncio.get_event_loop()
+
+    def _run():
+        return run_payment(context.bot)
+
+    try:
+        result = await loop.run_in_executor(None, _run)
+
+        if result['success']:
+            await update.message.reply_text(
+                f"✅ APPROVED\n\n{result['message'][:800]}"
+            )
         else:
-            print("\n⚠️  نتيجة غير معروفة — راجع final_result.png")
+            await update.message.reply_text(
+                f"⚠️ status: {result['status']}\n\n{result['message'][:800]}"
+            )
 
-        print(f"\n[+] أول 1500 حرف من الصفحة:\n{text[:1500]}")
+        # ابعت السكرين شوت للأدمن
+        if result.get('screenshot'):
+            await send_screenshot_to_admin(
+                context.bot,
+                result['screenshot'],
+                f"نتيجة /pay: {result['status']}\nURL: {result['url']}",
+            )
 
-        # سيب المتصفح مفتوح شوية لو عايز تتدخل
-        if not HEADLESS:
-            print("\n[*] المتصفح هيفضل مفتوح 60 ثانية...")
-            time.sleep(60)
+    except Exception as e:
+        tb = traceback.format_exc()
+        await update.message.reply_text(f"❌ خطأ:\n{e}")
 
-        browser.close()
+        # ابعت السكرين شوت + traceback للأدمن
+        files = sorted(
+            [f for f in os.listdir(SCREENSHOT_DIR) if f.startswith('exception_')],
+            key=lambda x: os.path.getmtime(os.path.join(SCREENSHOT_DIR, x)),
+            reverse=True,
+        )
+        if files:
+            path = os.path.join(SCREENSHOT_DIR, files[0])
+            await send_screenshot_to_admin(
+                context.bot,
+                path,
+                f"{type(e).__name__}: {e}\n\n{tb[-800:]}",
+            )
+        else:
+            await context.bot.send_message(
+                chat_id=ADMIN_CHAT_ID,
+                text=f"❌ خطأ بدون سكرين شوت:\n{e}\n\n{tb[-800:]}",
+            )
+
+
+# ═══════════════════════════════════════════════════════════
+#  Main
+# ═══════════════════════════════════════════════════════════
+def main():
+    print("=" * 60)
+    print("Authorize.Net Payment Bot")
+    print("=" * 60)
+
+    app = Application.builder().token(BOT_TOKEN).build()
+
+    app.add_handler(CommandHandler("start", cmd_start))
+    app.add_handler(CommandHandler("help", cmd_help))
+    app.add_handler(CommandHandler("status", cmd_status))
+    app.add_handler(CommandHandler("screenshot", cmd_screenshot))
+    app.add_handler(CommandHandler("pay", cmd_pay))
+
+    print("[*] البوت شغال...")
+    app.run_polling(allowed_updates=Update.ALL_TYPES)
 
 
 if __name__ == '__main__':
-    run()
+    main()
