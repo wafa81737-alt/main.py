@@ -1,21 +1,25 @@
-# نستخدم الصورة الرسمية من Playwright بنفس الإصدار اللي الكود بيطلبه
 FROM mcr.microsoft.com/playwright/python:v1.65.1-noble
 
-# نحدد مكان الشغل
 WORKDIR /app
 
-# ننسخ ملف المكتبات الأول عشان نستفيد من الـ cache
-COPY requirements.txt .
+# مكتبات النظام المطلوبة لـ xvfb والمتصفح
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+        xvfb \
+        x11-utils \
+        x11-xserver-utils \
+        fonts-liberation \
+        fonts-noto-color-emoji \
+        libatomic1 \
+    && rm -rf /var/lib/apt/lists/*
 
-# نسطب مكتبات بايثون
+COPY requirements.txt .
 RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir -r requirements.txt
 
-# نتأكد إن Chromium متسطب (الصورة الرسمية المفروض فيها، بس دي خطوة تأكيد)
 RUN playwright install chromium
 
-# ننسخ باقي الكود
 COPY . .
 
-# نشغل السكريبت
-CMD ["python", "main.py"]
+# نشغل تحت xvfb عشان المتصفح يشتغل headed على سيرفر بدون شاشة
+CMD ["xvfb-run", "-a", "--server-args=-screen 0 1280x1024x24", "python", "main.py"]
