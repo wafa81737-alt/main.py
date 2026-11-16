@@ -5,3 +5,4 @@ requests-toolbelt
 playwright
 fake-useragent
 user-agent
+curl_cffi
