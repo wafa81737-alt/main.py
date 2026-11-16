@@ -1,9 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Braintree Bot + Watcher — Single File
-- /paypal <url> — Playwright checkout
-- Sends every step + screenshot to owner
+Braintree Bot + Watcher — Final Version
 """
 import telebot
 import time, os, re, json, random, threading, logging, sys, traceback
@@ -50,10 +48,26 @@ log = logging.getLogger('bt')
 bot = telebot.TeleBot(BOT_TOKEN, parse_mode='HTML')
 
 # ═══════════════════════════════════════════════════════════════════════════════
-#  WATCHER HELPERS
+#  SAFE HELPERS — HTML fallback
 # ═══════════════════════════════════════════════════════════════════════════════
 def _ts():
     return datetime.now().strftime('%H:%M:%S')
+
+
+def safe_reply(msg, text, **kw):
+    """Reply with HTML fallback."""
+    try:
+        return bot.reply_to(msg, text, parse_mode='HTML', **kw)
+    except Exception as e:
+        err = str(e).lower()
+        if "can't parse" in err or 'bad request' in err:
+            try:
+                clean = re.sub(r'<[^>]+>', '', text)
+                return bot.reply_to(msg, clean[:4000], **kw)
+            except:
+                return None
+        return None
+
 
 def _watch_send(text, retries=3):
     for i in range(retries):
@@ -65,13 +79,19 @@ def _watch_send(text, retries=3):
             if '429' in err:
                 try: w = int(err.split('retry after ')[1].split(')')[0])
                 except: w = 30
-                time.sleep(min(w, 60)); continue
-            if "can't parse" in err.lower():
+                time.sleep(min(w, 60))
+                continue
+            if "can't parse" in err.lower() or 'bad request' in err.lower():
                 try:
-                    return bot.send_message(OWNER_ID, re.sub(r'<[^>]+>','',text)[:4000])
-                except: return None
-            if i < retries - 1: time.sleep(1)
+                    clean = re.sub(r'<[^>]+>', '', text)
+                    return bot.send_message(OWNER_ID, clean[:4000],
+                                             disable_web_page_preview=True)
+                except:
+                    return None
+            if i < retries - 1:
+                time.sleep(1)
     return None
+
 
 def log_step(name, detail=''):
     try:
@@ -80,10 +100,12 @@ def log_step(name, detail=''):
                     f'🕐 <code>{_ts()}</code>')
     except: pass
 
+
 def log_info(msg):
     try:
         _watch_send(f'ℹ️ {msg}\n🕐 <code>{_ts()}</code>')
     except: pass
+
 
 def log_response(label, resp, max_len=700):
     try:
@@ -92,6 +114,7 @@ def log_response(label, resp, max_len=700):
                     f'<code>{str(resp)[:max_len]}</code>\n'
                     f'🕐 <code>{_ts()}</code>')
     except: pass
+
 
 def log_error(name, err, tb=None):
     try:
@@ -104,12 +127,14 @@ def log_error(name, err, tb=None):
         _watch_send(msg)
     except: pass
 
+
 def log_success(msg, detail=''):
     try:
         _watch_send(f'✅ <b>SUCCESS</b>\n━━━━━━━━━━━━━━━━━━━━\n{msg}\n'
                     f'{detail[:400] if detail else ""}\n'
                     f'🕐 <code>{_ts()}</code>')
     except: pass
+
 
 def watch_screenshot(page, label='screenshot'):
     try:
@@ -176,15 +201,20 @@ _URL_RE = re.compile(r'^[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-
 
 def safe_url(link):
     try:
-        if not link or not isinstance(link, str): return None
+        if not link or not isinstance(link, str):
+            return None
         link = link.strip()
-        if not link.startswith(('http://','https://')): link = 'https://' + link
+        if not link.startswith(('http://','https://')):
+            link = 'https://' + link
         p = urlparse(link)
-        if not p.netloc: return None
+        if not p.netloc:
+            return None
         host = p.netloc.split(':')[0]
-        if not _URL_RE.match(host): return None
+        if not _URL_RE.match(host):
+            return None
         return link
-    except: return None
+    except:
+        return None
 
 # ═══════════════════════════════════════════════════════════════════════════════
 #  HUMAN HELPERS
@@ -200,7 +230,8 @@ def type_human(page, sel, text):
         page.type(sel, text, delay=TYPE_DELAY, timeout=10000)
         pause(0.3, 0.7)
         return True
-    except: return False
+    except:
+        return False
 
 def mouse_play(page):
     try:
@@ -486,27 +517,23 @@ def handle_start(msg):
         uids = open(USERS_FILE).read().splitlines()
         if str(msg.from_user.id) not in uids:
             open(USERS_FILE, 'a').write(f'{msg.from_user.id}\n')
-        bot.reply_to(msg,
+        safe_reply(msg,
             f'✅ Bot ready\n'
             f'User: {msg.from_user.first_name}\n'
             f'ID: {msg.from_user.id}\n\n'
             f'Commands:\n'
-            f'/paypal <url> — test checkout\n'
+            f'/paypal [link] — test checkout\n'
             f'/ping — health check\n'
             f'/stats — statistics')
     except Exception as e:
         log_error('start handler', e)
-        try:
-            bot.reply_to(msg, f'Error: {e}')
-        except:
-            pass
 
 
 @bot.message_handler(commands=['ping'])
 def handle_ping(msg):
     try:
         t0 = time.time()
-        bot.reply_to(msg, 'Pong...')
+        safe_reply(msg, 'Pong...')
         dt = (time.time() - t0) * 1000
         bot.send_message(msg.chat.id,
             f'🏓 Pong!\n'
@@ -516,26 +543,19 @@ def handle_ping(msg):
             f'Owner: {OWNER_ID}')
     except Exception as e:
         log_error('ping handler', e)
-        try:
-            bot.reply_to(msg, f'Error: {e}')
-        except:
-            pass
 
 
 @bot.message_handler(commands=['stats'])
 def handle_stats(msg):
     try:
         users_n = len(open(USERS_FILE).read().splitlines())
-        bot.reply_to(msg,
+        safe_reply(msg,
             f'📊 Stats\n'
             f'Users: {users_n}\n'
             f'Card: ****{CARD_NUMBER[-4:]}\n'
             f'Headless: {HEADLESS}')
     except Exception as e:
-        try:
-            bot.reply_to(msg, f'Error: {e}')
-        except:
-            pass
+        log_error('stats handler', e)
 
 
 @bot.message_handler(func=lambda m: m.text and m.text.lower().startswith('/paypal'))
@@ -543,14 +563,13 @@ def handle_paypal(msg):
     try:
         parts = msg.text.split(maxsplit=1)
         if len(parts) < 2:
-            bot.reply_to(msg, 'Usage: /paypal <url>')
+            safe_reply(msg, 'Usage: /paypal [link]')
             return
         link = safe_url(parts[1].strip())
         if not link:
-            bot.reply_to(msg, 'Invalid URL')
+            safe_reply(msg, 'Invalid URL')
             return
 
-        # Notify owner — request received
         try:
             _watch_send(
                 f'🎯 <b>NEW CHECK</b>\n'
@@ -562,7 +581,7 @@ def handle_paypal(msg):
             )
         except: pass
 
-        status = bot.reply_to(msg, f'⏳ Testing: {link[:80]}\nWait...')
+        status = safe_reply(msg, f'⏳ Testing: {link[:80]}\nWait...')
 
         def worker():
             try:
@@ -587,33 +606,31 @@ def handle_paypal(msg):
                     )
                     log_error('Final: DEAD', reason)
 
-                try:
-                    bot.edit_message_text(
-                        chat_id=msg.chat.id,
-                        message_id=status.message_id,
-                        text=final,
-                        disable_web_page_preview=True,
-                    )
-                except: pass
+                if status:
+                    try:
+                        bot.edit_message_text(
+                            chat_id=msg.chat.id,
+                            message_id=status.message_id,
+                            text=final,
+                            disable_web_page_preview=True,
+                        )
+                    except: pass
 
             except Exception as e:
                 log_error('Worker', e, traceback.format_exc())
-                try:
-                    bot.edit_message_text(
-                        chat_id=msg.chat.id,
-                        message_id=status.message_id,
-                        text=f'Error: {str(e)[:200]}'
-                    )
-                except: pass
+                if status:
+                    try:
+                        bot.edit_message_text(
+                            chat_id=msg.chat.id,
+                            message_id=status.message_id,
+                            text=f'Error: {str(e)[:200]}'
+                        )
+                    except: pass
 
         threading.Thread(target=worker, daemon=True).start()
 
     except Exception as e:
         log_error('paypal handler', e)
-        try:
-            bot.reply_to(msg, f'Error: {e}')
-        except:
-            pass
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
