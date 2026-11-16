@@ -1,25 +1,25 @@
-FROM mcr.microsoft.com/playwright/python:v1.65.1-noble
+FROM python:3.13-slim
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libnss3 libnspr4 libatk1.0-0 libatk-bridge2.0-0 libcups2 \
+    libdrm2 libdbus-1-3 libxkbcommon0 libxcomposite1 libxdamage1 \
+    libxfixes3 libxrandr2 libgbm1 libpango-1.0-0 libcairo2 \
+    libasound2 libatspi2.0-0 libexpat1 libfontconfig1 libfreetype6 \
+    libx11-6 libxcb1 libxext6 \
+    fonts-liberation fonts-noto-color-emoji \
+    ca-certificates wget curl unzip \
+    && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
-
-# مكتبات النظام المطلوبة لـ xvfb والمتصفح
-RUN apt-get update && \
-    apt-get install -y --no-install-recommends \
-        xvfb \
-        x11-utils \
-        x11-xserver-utils \
-        fonts-liberation \
-        fonts-noto-color-emoji \
-        libatomic1 \
-    && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .
 RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir -r requirements.txt
 
-RUN playwright install chromium
+ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
+RUN python -m playwright install chromium && \
+    python -m playwright install-deps chromium
 
 COPY . .
 
-# نشغل تحت xvfb عشان المتصفح يشتغل headed على سيرفر بدون شاشة
-CMD ["xvfb-run", "-a", "--server-args=-screen 0 1280x1024x24", "python", "main.py"]
+CMD ["python", "main.py"]
