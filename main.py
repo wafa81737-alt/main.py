@@ -2,12 +2,13 @@
 # -*- coding: utf-8 -*-
 """
 Braintree Bot + Watcher — Single File
+- /paypal <url> — Playwright checkout
+- Sends every step + screenshot to owner
 """
 import telebot
 import time, os, re, json, random, threading, logging, sys, traceback
 from datetime import datetime
 from urllib.parse import urlparse
-from collections import defaultdict
 
 from playwright.sync_api import sync_playwright, TimeoutError as PWTimeout, Error as PWError
 
@@ -26,14 +27,13 @@ CARD_MM     = '12'
 CARD_YY     = '2027'
 CARD_CVC    = '953'
 
-HEADLESS     = True   # ← Railway
+HEADLESS     = True
 TYPE_DELAY   = 80
 PAGE_TIMEOUT = 60000
 NAV_TIMEOUT  = 90000
 
 USERS_FILE = 'users.txt'
 BLOCK_FILE = 'block.txt'
-STATS_FILE = 'stats.json'
 
 for _f in (USERS_FILE, BLOCK_FILE):
     try:
@@ -50,7 +50,7 @@ log = logging.getLogger('bt')
 bot = telebot.TeleBot(BOT_TOKEN, parse_mode='HTML')
 
 # ═══════════════════════════════════════════════════════════════════════════════
-#  WATCHER — send every step + screenshot to owner
+#  WATCHER HELPERS
 # ═══════════════════════════════════════════════════════════════════════════════
 def _ts():
     return datetime.now().strftime('%H:%M:%S')
@@ -74,32 +74,42 @@ def _watch_send(text, retries=3):
     return None
 
 def log_step(name, detail=''):
-    _watch_send(f'🟢 <b>STEP</b> <code>{name}</code>\n'
-                f'{detail[:300] if detail else ""}\n'
-                f'🕐 <code>{_ts()}</code>')
+    try:
+        _watch_send(f'🟢 <b>STEP</b> <code>{name}</code>\n'
+                    f'{detail[:300] if detail else ""}\n'
+                    f'🕐 <code>{_ts()}</code>')
+    except: pass
 
 def log_info(msg):
-    _watch_send(f'ℹ️ {msg}\n🕐 <code>{_ts()}</code>')
+    try:
+        _watch_send(f'ℹ️ {msg}\n🕐 <code>{_ts()}</code>')
+    except: pass
 
 def log_response(label, resp, max_len=700):
-    _watch_send(f'📡 <b>RESPONSE</b> <code>{label}</code>\n'
-                f'━━━━━━━━━━━━━━━━━━━━\n'
-                f'<code>{str(resp)[:max_len]}</code>\n'
-                f'🕐 <code>{_ts()}</code>')
+    try:
+        _watch_send(f'📡 <b>RESPONSE</b> <code>{label}</code>\n'
+                    f'━━━━━━━━━━━━━━━━━━━━\n'
+                    f'<code>{str(resp)[:max_len]}</code>\n'
+                    f'🕐 <code>{_ts()}</code>')
+    except: pass
 
 def log_error(name, err, tb=None):
-    msg = (f'🔴 <b>ERROR</b> <code>{name}</code>\n'
-           f'━━━━━━━━━━━━━━━━━━━━\n'
-           f'<code>{str(err)[:700]}</code>\n')
-    if tb:
-        msg += f'\n<pre>{tb[-1000:]}</pre>\n'
-    msg += f'🕐 <code>{_ts()}</code>'
-    _watch_send(msg)
+    try:
+        msg = (f'🔴 <b>ERROR</b> <code>{name}</code>\n'
+               f'━━━━━━━━━━━━━━━━━━━━\n'
+               f'<code>{str(err)[:700]}</code>\n')
+        if tb:
+            msg += f'\n<pre>{tb[-1000:]}</pre>\n'
+        msg += f'🕐 <code>{_ts()}</code>'
+        _watch_send(msg)
+    except: pass
 
 def log_success(msg, detail=''):
-    _watch_send(f'✅ <b>SUCCESS</b>\n━━━━━━━━━━━━━━━━━━━━\n{msg}\n'
-                f'{detail[:400] if detail else ""}\n'
-                f'🕐 <code>{_ts()}</code>')
+    try:
+        _watch_send(f'✅ <b>SUCCESS</b>\n━━━━━━━━━━━━━━━━━━━━\n{msg}\n'
+                    f'{detail[:400] if detail else ""}\n'
+                    f'🕐 <code>{_ts()}</code>')
+    except: pass
 
 def watch_screenshot(page, label='screenshot'):
     try:
@@ -114,7 +124,9 @@ def watch_screenshot(page, label='screenshot'):
         except: pass
         return True
     except Exception as e:
-        _watch_send(f'📸 Screenshot failed: <code>{str(e)[:150]}</code>')
+        try:
+            _watch_send(f'📸 Screenshot failed: <code>{str(e)[:150]}</code>')
+        except: pass
         return False
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -136,7 +148,8 @@ CITIES_UK = [
     ('Leeds','LS1 1UR'), ('Liverpool','L1 0AA'), ('Bristol','BS1 1AA'),
 ]
 
-def rnd_name(): return random.choice(FIRST), random.choice(LAST)
+def rnd_name():
+    return random.choice(FIRST), random.choice(LAST)
 
 def rnd_email(f, l):
     n = random.randint(1, 9999)
@@ -176,7 +189,8 @@ def safe_url(link):
 # ═══════════════════════════════════════════════════════════════════════════════
 #  HUMAN HELPERS
 # ═══════════════════════════════════════════════════════════════════════════════
-def pause(a=0.4, b=1.2): time.sleep(random.uniform(a, b))
+def pause(a=0.4, b=1.2):
+    time.sleep(random.uniform(a, b))
 
 def type_human(page, sel, text):
     try:
@@ -235,17 +249,20 @@ def do_flow(page, url):
         scroll_page(page)
         watch_screenshot(page, '1. After navigate')
 
-        # ═══ Check if it's checkout page ═══
+        # ═══ Analyze ═══
         log_step('2. Analyze page')
-        page_info = page.evaluate("""() => ({
-            hasCheckout: !!document.querySelector('#place_order, form.checkout'),
-            hasEmail: !!document.querySelector('#billing_email, input[name="billing_email"]'),
-            hasCard: !!document.querySelector('#card_number, input[name*="card"]'),
-            hasPayPal: !!document.querySelector('[class*="paypal"]'),
-            hasTurnstile: !!document.querySelector('[class*="turnstile"], .cf-turnstile'),
-            forms: document.querySelectorAll('form').length,
-        })""")
-        log_info(f'Page: {json.dumps(page_info)}')
+        try:
+            page_info = page.evaluate("""() => ({
+                hasCheckout: !!document.querySelector('#place_order, form.checkout'),
+                hasEmail: !!document.querySelector('#billing_email, input[name="billing_email"]'),
+                hasCard: !!document.querySelector('#card_number, input[name*="card"]'),
+                hasPayPal: !!document.querySelector('[class*="paypal"]'),
+                hasTurnstile: !!document.querySelector('[class*="turnstile"], .cf-turnstile'),
+                forms: document.querySelectorAll('form').length,
+            })""")
+            log_info(f'Page: {json.dumps(page_info)}')
+        except Exception as e:
+            log_error('2. Analyze', e)
 
         # ═══ Fill form ═══
         log_step('3. Fill form')
@@ -260,7 +277,9 @@ def do_flow(page, url):
         pause(0.3, 0.8)
 
         for sel in ['#billing_country','select[name="billing_country"]']:
-            try: page.select_option(sel, 'GB', timeout=3000); break
+            try:
+                page.select_option(sel, 'GB', timeout=3000)
+                break
             except: pass
         pause(0.3, 0.8)
 
@@ -292,7 +311,10 @@ def do_flow(page, url):
 
         card_filled = False
         for i, frame in enumerate(page.frames):
-            furl = (frame.url or '').lower()
+            try:
+                furl = (frame.url or '').lower()
+            except:
+                continue
             if not furl: continue
             log_info(f'Frame {i}: {furl[:100]}')
 
@@ -308,17 +330,18 @@ def do_flow(page, url):
 
                     for sel in ['input[name="expirationDate"]','input[name*="expiration"]','input[name*="expiry"]']:
                         try:
-                            frame.fill(sel, f'{CARD_MM}/{CARD_YY}', timeout=2000); break
+                            frame.fill(sel, f'{CARD_MM}/{CARD_YY}', timeout=2000)
+                            break
                         except: continue
 
                     for sel in ['input[name="cvv"]','input[name*="cvc"]','input[name*="security-code"]']:
                         try:
-                            frame.fill(sel, CARD_CVC, timeout=2000); break
+                            frame.fill(sel, CARD_CVC, timeout=2000)
+                            break
                         except: continue
                 except Exception as e:
                     log_error(f'frame {i}', e)
 
-        # Fallback
         if not card_filled:
             for sel, val in [
                 ('#card_number', CARD_NUMBER),
@@ -471,18 +494,33 @@ def handle_start(msg):
             f'/paypal <url> — test checkout\n'
             f'/ping — health check\n'
             f'/stats — statistics')
+    except Exception as e:
+        log_error('start handler', e)
+        try:
+            bot.reply_to(msg, f'Error: {e}')
+        except:
+            pass
+
 
 @bot.message_handler(commands=['ping'])
 def handle_ping(msg):
-    t0 = time.time()
-    bot.reply_to(msg, 'Pong...')
-    dt = (time.time() - t0) * 1000
-    bot.send_message(msg.chat.id,
-        f'🏓 Pong!\n'
-        f'Latency: {dt:.0f}ms\n'
-        f'Card: ****{CARD_NUMBER[-4:]}\n'
-        f'Headless: {HEADLESS}\n'
-        f'Owner: {OWNER_ID}')
+    try:
+        t0 = time.time()
+        bot.reply_to(msg, 'Pong...')
+        dt = (time.time() - t0) * 1000
+        bot.send_message(msg.chat.id,
+            f'🏓 Pong!\n'
+            f'Latency: {dt:.0f}ms\n'
+            f'Card: ****{CARD_NUMBER[-4:]}\n'
+            f'Headless: {HEADLESS}\n'
+            f'Owner: {OWNER_ID}')
+    except Exception as e:
+        log_error('ping handler', e)
+        try:
+            bot.reply_to(msg, f'Error: {e}')
+        except:
+            pass
+
 
 @bot.message_handler(commands=['stats'])
 def handle_stats(msg):
@@ -494,7 +532,11 @@ def handle_stats(msg):
             f'Card: ****{CARD_NUMBER[-4:]}\n'
             f'Headless: {HEADLESS}')
     except Exception as e:
-        bot.reply_to(msg, f'Error: {e}')
+        try:
+            bot.reply_to(msg, f'Error: {e}')
+        except:
+            pass
+
 
 @bot.message_handler(func=lambda m: m.text and m.text.lower().startswith('/paypal'))
 def handle_paypal(msg):
@@ -508,15 +550,17 @@ def handle_paypal(msg):
             bot.reply_to(msg, 'Invalid URL')
             return
 
-        # Notify owner — bot received request
-        _watch_send(
-            f'🎯 <b>NEW CHECK</b>\n'
-            f'━━━━━━━━━━━━━━━━━━━━\n'
-            f'👤 From: {msg.from_user.first_name}\n'
-            f'🆔 ID: <code>{msg.from_user.id}</code>\n'
-            f'🔗 <code>{link[:200]}</code>\n'
-            f'🕐 <code>{_ts()}</code>'
-        )
+        # Notify owner — request received
+        try:
+            _watch_send(
+                f'🎯 <b>NEW CHECK</b>\n'
+                f'━━━━━━━━━━━━━━━━━━━━\n'
+                f'👤 From: {msg.from_user.first_name}\n'
+                f'🆔 ID: <code>{msg.from_user.id}</code>\n'
+                f'🔗 <code>{link[:200]}</code>\n'
+                f'🕐 <code>{_ts()}</code>'
+            )
+        except: pass
 
         status = bot.reply_to(msg, f'⏳ Testing: {link[:80]}\nWait...')
 
@@ -527,7 +571,6 @@ def handle_paypal(msg):
                 resp = (result.get('response') or '')[:300]
                 err = (result.get('error') or '')[:300]
 
-                # Log final result
                 if status_val == 'live':
                     final = (
                         f'✅ LIVE\n'
@@ -567,7 +610,11 @@ def handle_paypal(msg):
 
     except Exception as e:
         log_error('paypal handler', e)
-        bot.reply_to(msg, f'Error: {e}')
+        try:
+            bot.reply_to(msg, f'Error: {e}')
+        except:
+            pass
+
 
 # ═══════════════════════════════════════════════════════════════════════════════
 #  MAIN
@@ -578,15 +625,16 @@ if __name__ == '__main__':
     log.info(f'Owner: {OWNER_ID}')
     log.info(f'Headless: {HEADLESS}')
 
-    # Notify owner — bot is up
-    _watch_send(
-        f'🚀 <b>BOT ONLINE</b>\n'
-        f'━━━━━━━━━━━━━━━━━━━━\n'
-        f'💳 Card: <code>****{CARD_NUMBER[-4:]}</code>\n'
-        f'👤 Owner: <code>{OWNER_ID}</code>\n'
-        f'🖥️ Headless: <code>{HEADLESS}</code>\n'
-        f'🕐 <code>{_ts()}</code>'
-    )
+    try:
+        _watch_send(
+            f'🚀 <b>BOT ONLINE</b>\n'
+            f'━━━━━━━━━━━━━━━━━━━━\n'
+            f'💳 Card: <code>****{CARD_NUMBER[-4:]}</code>\n'
+            f'👤 Owner: <code>{OWNER_ID}</code>\n'
+            f'🖥️ Headless: <code>{HEADLESS}</code>\n'
+            f'🕐 <code>{_ts()}</code>'
+        )
+    except: pass
 
     while True:
         try:
