@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-CAF Donate + RSM Secure 3DS Checker
+CAF Donate + RSM Secure 3DS Checker - Final
 """
 import telebot
 import time, os, re, json, random, threading, logging, sys, traceback
@@ -41,7 +41,7 @@ DONOR = {
     'title': 'Mr',
 }
 
-DONATION_AMOUNT = '5'
+DONATION_AMOUNT = '5.00'  # ← £5.00
 CAF_URL = 'https://cafdonate.cafonline.org/23045'
 CAMPAIGN_ID = '23045'
 
@@ -192,7 +192,7 @@ def mouse_play(page):
     except: pass
 
 # ═══════════════════════════════════════════════════════════════════════════════
-#  CAF + RSM FLOW
+#  CAF FLOW
 # ═══════════════════════════════════════════════════════════════════════════════
 def caf_flow(page):
     """Full CAF → RSM flow."""
@@ -208,57 +208,113 @@ def caf_flow(page):
 
         log_info(f'Title: {page.title()}')
 
-        # ═══ STEP 2: Fill donation form ═══
-        log_step('2. Fill donation form')
-
-        # Amount
-        for sel in ['#customAmountSingle', '#CustomAmountSingle',
-                    'input[name="customAmountSingle"]', 'input[name*="amount"]',
-                    'input[id*="Amount"]']:
-            if type_human(page, sel, DONATION_AMOUNT):
-                log_info(f'Amount filled: {sel}')
-                break
-        pause(0.3, 0.8)
-
-        # Tick personal card confirmation
-        for sel in ['#confirmPersonalCard', '#ConfirmPersonalCardForGiftAid',
-                    'input[name="confirmPersonalCard"]']:
+        # ═══ STEP 2: Fill amount 5.00 ═══
+        log_step('2. Fill amount', f'£{DONATION_AMOUNT}')
+        
+        amount_filled = False
+        # Try all possible amount selectors
+        for sel in [
+            '#customAmountSingle', '#CustomAmountSingle',
+            'input[name="customAmountSingle"]',
+            'input[name="CustomAmountSingle"]',
+            'input[name*="customAmount"]',
+            'input[id*="customAmount"]',
+            'input[name*="Amount"]',
+            'input[id*="Amount"]',
+            'input[type="number"]',
+            'input[type="text"][name*="amount"]',
+        ]:
             try:
-                page.check(sel, timeout=2000)
-                log_info(f'Personal card confirmed')
+                # Clear first
+                page.fill(sel, '', timeout=2000)
+                pause(0.2, 0.4)
+                # Then type
+                page.type(sel, DONATION_AMOUNT, delay=TYPE_DELAY, timeout=5000)
+                amount_filled = True
+                log_info(f'Amount filled: {sel} = {DONATION_AMOUNT}')
                 break
-            except: continue
-        pause(0.3, 0.8)
+            except:
+                continue
+        
+        # Try clicking £5 preset button as backup
+        if not amount_filled:
+            for sel in [
+                'button:has-text("£5")', 'button:has-text("5.00")',
+                'label:has-text("£5")', 'input[value="5"]',
+                'input[value="5.00"]',
+            ]:
+                try:
+                    page.click(sel, timeout=2000)
+                    log_info(f'Clicked £5 preset: {sel}')
+                    amount_filled = True
+                    break
+                except:
+                    continue
+        
+        if not amount_filled:
+            log_info('Amount not filled explicitly, will try default')
+        
+        pause(0.5, 1.0)
+        watch_screenshot(page, '2. Amount filled')
 
-        # ═══ STEP 3: Click Donate / Next ═══
-        log_step('3. Click donate button')
+        # ═══ STEP 3: Confirm personal card ═══
+        log_step('3. Confirm personal card')
+        try:
+            for sel in [
+                'input[name="ConfirmPersonalCardForGiftAid"]',
+                '#ConfirmPersonalCardForGiftAid',
+                'input[id*="confirmPersonalCard"]',
+                'input[id*="ConfirmPersonalCard"]',
+                'label:has-text("personal card") input[type="checkbox"]',
+                'input[type="checkbox"][id*="personal"]',
+                'input[type="checkbox"][name*="personal"]',
+            ]:
+                try:
+                    if not page.is_checked(sel, timeout=1000):
+                        page.check(sel, timeout=2000, force=True)
+                        log_info(f'Personal card checked: {sel}')
+                    break
+                except:
+                    continue
+        except Exception as e:
+            log_error('3. Personal card', e)
+        
+        pause(0.5, 1.0)
+
+        # ═══ STEP 4: Click Donate/Next ═══
+        log_step('4. Click donate button')
 
         donate_clicked = False
-        for sel in ['button:has-text("Donate")', 'button:has-text("Next")',
-                    'button:has-text("Continue")', 'input[value*="Donate"]',
-                    'button[type="submit"]', '.btn-primary']:
+        for sel in [
+            'button:has-text("Donate")',
+            'button:has-text("Next")',
+            'button:has-text("Continue")',
+            'input[value*="Donate"]',
+            'input[value*="Next"]',
+            'button[type="submit"]',
+            '.btn-primary',
+            '.btn-donate',
+        ]:
             try:
                 page.click(sel, timeout=3000)
                 donate_clicked = True
                 log_info(f'Clicked: {sel}')
                 break
-            except: continue
+            except:
+                continue
 
         if not donate_clicked:
-            log_error('3. Donate', 'No button found')
-            watch_screenshot(page, '3. No donate button')
-            # Try navigating directly to payment
-            try:
-                page.goto(f'{CAF_URL}/CCPaymentDetails', timeout=NAV_TIMEOUT)
-            except: pass
+            log_error('4. Donate', 'No button found')
+            watch_screenshot(page, '4. No donate button')
+            res['error'] = 'NO_DONATE_BUTTON'
+            return res
 
         pause(2.0, 4.0)
-        watch_screenshot(page, '3. After donate')
+        watch_screenshot(page, '4. After donate')
 
-        # ═══ STEP 4: Fill contact details if form appears ═══
-        log_step('4. Fill contact details')
+        # ═══ STEP 5: Fill contact form (if appears) ═══
+        log_step('5. Fill contact details')
 
-        # Check if we're on contact page
         has_contact = page.evaluate("""() => ({
             hasFirstName: !!document.querySelector('input[name*="irstName"], #firstName, #UserFirstName'),
             hasEmail: !!document.querySelector('input[name*="mail"], #email, #UserEmail'),
@@ -267,100 +323,162 @@ def caf_flow(page):
         log_info(f'Contact form: {json.dumps(has_contact)}')
 
         if has_contact.get('hasFirstName'):
-            # Fill first name
             for sel in ['#UserFirstName','input[name="UserFirstName"]',
                         'input[name*="FirstName"]','#firstName']:
-                if type_human(page, sel, DONOR['first_name']):
-                    log_info(f'First name filled')
-                    break
+                if type_human(page, sel, DONOR['first_name']): break
             pause(0.3, 0.6)
 
-            # Last name
             for sel in ['#UserLastName','input[name="UserLastName"]',
                         'input[name*="LastName"]','#lastName']:
-                if type_human(page, sel, DONOR['last_name']):
-                    break
+                if type_human(page, sel, DONOR['last_name']): break
             pause(0.3, 0.6)
 
-            # Email
             for sel in ['#UserEmail','input[name="UserEmail"]',
                         'input[name*="mail"]','#email']:
-                if type_human(page, sel, DONOR['email']):
-                    log_info(f'Email filled')
-                    break
+                if type_human(page, sel, DONOR['email']): break
             pause(0.3, 0.6)
 
-            # Phone
             for sel in ['#UserPhone','input[name="UserPhone"]',
                         'input[name*="Phone"]','#phone']:
-                if type_human(page, sel, DONOR['phone']):
-                    break
+                if type_human(page, sel, DONOR['phone']): break
             pause(0.3, 0.6)
 
-            # Postcode
             for sel in ['#PostCode','input[name="PostCode"]',
                         'input[name*="ostcode"]','#postcode']:
-                if type_human(page, sel, DONOR['postcode']):
-                    break
+                if type_human(page, sel, DONOR['postcode']): break
             pause(0.3, 0.6)
 
-            watch_screenshot(page, '4. Contact filled')
+            watch_screenshot(page, '5. Contact filled')
 
-            # Next button
-            for sel in ['button:has-text("Next")','button:has-text("Continue")',
-                        'button:has-text("Pay")','button[type="submit"]']:
-                try:
-                    page.click(sel, timeout=3000)
-                    log_info(f'Clicked next: {sel}')
-                    break
-                except: continue
-            pause(2.0, 4.0)
-
-        # ═══ STEP 5: Wait for RSM redirect ═══
-        log_step('5. Wait for RSM Secure')
+        # ═══ STEP 6: Select "No thanks" for updates ═══
+        log_step('6. Select No thanks for updates')
         
-        # انتظر redirect لـ RSM
-        rsm_loaded = False
-        for attempt in range(30):
-            current_url = page.url
-            log_info(f'URL [{attempt+1}/30]: {current_url[:100]}')
-            
-            if 'rsmsecure.com' in current_url:
-                log_info('✅ RSM Secure loaded!')
-                rsm_loaded = True
+        updates_selected = False
+        for sel in [
+            'input[name="ReceiveUpdatesSelectedOption"][value="2"]',
+            '#receiveUpdatesNo',
+            'label:has-text("No thanks") input',
+            'input[type="radio"][value="No"]',
+            'input[type="radio"][value="no"]',
+            'input[type="radio"][value="2"]',
+            'input[type="radio"][id*="no"]',
+        ]:
+            try:
+                page.check(sel, timeout=2000, force=True)
+                updates_selected = True
+                log_info(f'Selected: {sel}')
                 break
-            
-            # Maybe form auto-submits
-            page.wait_for_timeout(1000)
+            except:
+                continue
         
-        watch_screenshot(page, '5. Current page')
+        if not updates_selected:
+            try:
+                page.click('text=/No thanks/i', timeout=3000, force=True)
+                log_info('Clicked "No thanks" text')
+            except:
+                pass
+        
+        pause(0.5, 1.0)
+        watch_screenshot(page, '6. Updates selected')
+
+        # ═══ STEP 7: Click Next (Payment) ═══
+        log_step('7. Click Next (Payment)')
+        
+        next_clicked = False
+        for sel in [
+            'button:has-text("Next")', 'button:has-text("Continue")',
+            'button:has-text("Payment")', 'button:has-text("Pay")',
+            'button:has-text("Proceed")', 'input[value*="Next"]',
+            'input[value*="Continue"]', 'button[type="submit"]',
+            '.next-step', '.btn-next',
+        ]:
+            try:
+                page.click(sel, timeout=3000)
+                next_clicked = True
+                log_info(f'Clicked Next: {sel}')
+                break
+            except:
+                continue
+        
+        if not next_clicked:
+            log_error('7. Next', 'No Next button')
+            watch_screenshot(page, '7. No Next')
+            res['error'] = 'NO_NEXT_BUTTON'
+            return res
+        
+        log_info('Next clicked, waiting for redirect...')
+        
+        # ═══ STEP 8: Wait for RSM redirect (90s) ═══
+        log_step('8. Wait for RSM Secure (90s)')
+        
+        rsm_loaded = False
+        for attempt in range(90):
+            try:
+                current_url = page.url
+                
+                if attempt % 10 == 0:
+                    log_info(f'URL [{attempt+1}/90]: {current_url[:100]}')
+                
+                if 'rsmsecure.com' in current_url:
+                    log_info('✅ RSM Secure loaded!')
+                    rsm_loaded = True
+                    break
+                
+                if '/CCPaymentDetails' in current_url:
+                    log_info('✅ On CCPaymentDetails page!')
+                    rsm_loaded = True
+                    break
+                
+                page.wait_for_timeout(1000)
+            except Exception as e:
+                log_error(f'8. wait {attempt}', e)
+                break
+        
+        watch_screenshot(page, '8. Current page')
 
         if not rsm_loaded:
-            log_error('5. RSM redirect', f'Not redirected after 30s. Current: {page.url[:100]}')
-            res['error'] = 'NO_RSM_REDIRECT'
-            return res
+            log_error('8. RSM redirect', f'Not redirected after 90s. URL: {page.url[:100]}')
+            
+            # Capture page for debugging
+            try:
+                debug_html = page.content()[:3000]
+                log_response('Page HTML', debug_html)
+            except:
+                pass
+            
+            # Try direct navigation as last resort
+            log_info('Trying direct CCPaymentDetails...')
+            try:
+                page.goto(f'{CAF_URL}/CCPaymentDetails', wait_until='domcontentloaded', timeout=NAV_TIMEOUT)
+                pause(3.0, 5.0)
+                if 'rsmsecure' in page.url.lower():
+                    log_info('✅ Direct nav worked!')
+                    rsm_loaded = True
+            except Exception as e:
+                log_error('Direct nav', e)
+            
+            if not rsm_loaded:
+                res['error'] = f'NO_RSM_REDIRECT (stuck at {page.url[:100]})'
+                return res
 
-        # ═══ STEP 6: Fill RSM card form ═══
-        log_step('6. Fill RSM card form')
+        # ═══ STEP 9: Fill RSM card form ═══
+        log_step('9. Fill RSM card form')
         pause(2.0, 3.0)
 
-        # Card holder
         for sel in ['#cardHolder','input[name="cardHolder"]',
                     'input[name*="holder"]','#CardHolder']:
             if type_human(page, sel, f'{DONOR["first_name"]} {DONOR["last_name"]}'):
-                log_info(f'Card holder filled')
+                log_info('Card holder filled')
                 break
         pause(0.3, 0.6)
 
-        # Card number
         for sel in ['#cardNumber','input[name="cardNumber"]',
                     'input[name*="cardNumber"]','#CardNumber']:
             if type_human(page, sel, CARD_NUMBER):
-                log_info(f'Card number filled')
+                log_info('Card number filled')
                 break
         pause(0.3, 0.6)
 
-        # Expiry month
         for sel in ['#expiryDateMonth','select[name="expiryDateMonth"]',
                     'select[name*="Month"]']:
             try:
@@ -370,7 +488,6 @@ def caf_flow(page):
             except: continue
         pause(0.3, 0.6)
 
-        # Expiry year
         for sel in ['#expiryDateYear','select[name="expiryDateYear"]',
                     'select[name*="Year"]']:
             try:
@@ -380,18 +497,17 @@ def caf_flow(page):
             except: continue
         pause(0.3, 0.6)
 
-        # CVV
         for sel in ['#CV2','input[name="CV2"]',
                     'input[name*="CV"]','input[name*="cvv"]']:
             if type_human(page, sel, CARD_CVC):
-                log_info(f'CVV filled')
+                log_info('CVV filled')
                 break
         pause(0.5, 1.0)
 
-        watch_screenshot(page, '6. Card filled')
+        watch_screenshot(page, '9. Card filled')
 
-        # ═══ STEP 7: Submit ═══
-        log_step('7. Submit payment')
+        # ═══ STEP 10: Submit ═══
+        log_step('10. Submit payment')
         
         submitted = False
         for sel in ['#submit','input[name="submit"]',
@@ -405,19 +521,16 @@ def caf_flow(page):
             except: continue
 
         if not submitted:
-            log_error('7. Submit', 'No submit button')
-            watch_screenshot(page, '7. No submit')
+            log_error('10. Submit', 'No submit button')
+            watch_screenshot(page, '10. No submit')
             res['error'] = 'NO_SUBMIT'
             return res
 
-        # ═══ STEP 8: Wait and read response ═══
-        log_step('8. Wait for response')
+        # ═══ STEP 11: Read result ═══
+        log_step('11. Wait and read result')
         page.wait_for_timeout(15000)
-        watch_screenshot(page, '8. After submit')
+        watch_screenshot(page, '11. After submit')
 
-        # ═══ STEP 9: Read result ═══
-        log_step('9. Read result')
-        
         try:
             text = page.content()
             body_text = page.evaluate("() => document.body ? document.body.innerText : ''")
@@ -426,61 +539,43 @@ def caf_flow(page):
             log_info(f'URL: {page.url}')
             
             low = body_text.lower()
-            url_low = page.url.lower()
             
-            # Check for 3DS challenge
             if 'password' in low or 'otp' in low or 'verification' in low or '3dsecure' in low:
                 res['status'] = 'live'
                 res['response'] = 'LIVE_3DS: Card alive, challenge required'
                 log_success('3DS Challenge — Card LIVE!', body_text[:200])
-            
-            # Approved
             elif 'approved' in low or 'successful' in low or 'thank you' in low or 'confirmed' in low:
                 res['status'] = 'live'
                 res['response'] = 'CHARGED: Transaction approved'
                 log_success('APPROVED!', body_text[:200])
-            
-            # Declined
             elif 'declined' in low:
                 res['status'] = 'live'
                 res['response'] = 'DECLINED: Card declined (LIVE)'
-                log_success('Declined — Card tested', body_text[:200])
-            
+                log_success('Declined', body_text[:200])
             elif 'insufficient' in low:
                 res['status'] = 'live'
                 res['response'] = 'INSUFFICIENT_FUNDS (LIVE)'
-                log_success('Insufficient funds', body_text[:200])
-            
+                log_success('Insufficient', body_text[:200])
             elif 'expired' in low:
                 res['status'] = 'live'
                 res['response'] = 'EXPIRED_CARD (LIVE)'
-                log_success('Expired', body_text[:200])
-            
             elif 'invalid' in low and 'card' in low:
                 res['status'] = 'live'
                 res['response'] = 'INVALID_CARD (LIVE)'
-                log_success('Invalid card', body_text[:200])
-            
-            elif 'cvv' in low or 'cv2' in low or 'security code' in low:
+            elif 'cvv' in low or 'cv2' in low:
                 res['status'] = 'live'
                 res['response'] = 'CVV_FAILURE (LIVE)'
-                log_success('CVV fail', body_text[:200])
-            
             elif 'error' in low or 'failure' in low:
                 m = re.search(r'failureReason["\']?[^>]*>([^<]+)<', text)
-                if m:
-                    res['response'] = m.group(1).strip()[:200]
-                else:
-                    res['response'] = body_text[:200]
-                log_error('Error', res['response'])
-            
+                res['response'] = m.group(1).strip()[:200] if m else body_text[:200]
+                log_error('11. Result', res['response'])
             else:
                 res['status'] = 'unknown'
                 res['response'] = f'UNKNOWN: {body_text[:200]}'
-                watch_screenshot(page, '9. Unknown')
+                watch_screenshot(page, '11. Unknown')
         
         except Exception as e:
-            log_error('9. Read', e)
+            log_error('11. Read', e)
 
     except PWTimeout as e:
         res['error'] = f'TIMEOUT: {str(e)[:150]}'
@@ -498,7 +593,6 @@ def caf_flow(page):
     return res
 
 def run_session():
-    """Run full flow."""
     final = {'status':'unknown','response':'','error':'','gateway':'rsm_secure'}
     
     try:
@@ -564,7 +658,6 @@ def handle_start(msg):
     except Exception as e:
         log_error('start handler', e)
 
-
 @bot.message_handler(commands=['ping'])
 def handle_ping(msg):
     try:
@@ -580,7 +673,6 @@ def handle_ping(msg):
     except Exception as e:
         log_error('ping handler', e)
 
-
 @bot.message_handler(commands=['stats'])
 def handle_stats(msg):
     try:
@@ -593,7 +685,6 @@ def handle_stats(msg):
             f'Campaign: {CAMPAIGN_ID}')
     except Exception as e:
         log_error('stats handler', e)
-
 
 @bot.message_handler(commands=['caf'])
 def handle_caf(msg):
@@ -611,7 +702,7 @@ def handle_caf(msg):
             )
         except: pass
 
-        status = safe_reply(msg, f'⏳ Testing CAF donation...\nWait (60-90s)...')
+        status = safe_reply(msg, f'⏳ Testing CAF donation (£{DONATION_AMOUNT})...\nWait (90-120s)...')
 
         def worker():
             try:
@@ -632,6 +723,7 @@ def handle_caf(msg):
                     reason = err or resp or 'UNKNOWN'
                     final = (
                         f'❌ DEAD\n'
+                        f'Amount: £{DONATION_AMOUNT}\n'
                         f'Response: {reason[:200]}'
                     )
                     log_error('Final: DEAD', reason)
@@ -662,12 +754,11 @@ def handle_caf(msg):
     except Exception as e:
         log_error('caf handler', e)
 
-
 # ═══════════════════════════════════════════════════════════════════════════════
 #  MAIN
 # ═══════════════════════════════════════════════════════════════════════════════
 if __name__ == '__main__':
-    log.info('Bot starting...')
+    log.info('CAF Bot starting...')
     log.info(f'Card: ****{CARD_NUMBER[-4:]}')
     log.info(f'Amount: £{DONATION_AMOUNT}')
     log.info(f'Headless: {HEADLESS}')
